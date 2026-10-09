@@ -5,7 +5,7 @@ module sdram_sim (
     input             resetn,
     output            busy,
 
-    // 3 sets of access interfaces, with 0 having the highest priority
+    // 4 sets of access interfaces, with 0 having the highest priority
     input             req0,         // request toggle
     output reg        ack0,         // acknowledge toggle
     input             wr0,          // 1: write, 0: read
@@ -28,7 +28,15 @@ module sdram_sim (
     input      [24:1] addr2,       
     input      [15:0] din2,        
     output reg [15:0] dout2,       
-    input       [1:0] be2
+    input       [1:0] be2,
+
+    input             req3, 
+    output reg        ack3, 
+    input             wr3,
+    input      [24:1] addr3,       
+    input      [15:0] din3,        
+    output reg [15:0] dout3,       
+    input       [1:0] be3
 );
 
 reg [15:0] mem [0:16*1024*1024-1];  // 32MB of memory
@@ -83,6 +91,14 @@ always @(posedge clk) begin
             port <= 2;
             busy_buf <= 1;
             state <= RAS;
+        end else if (req3 != ack3) begin
+            addr <= addr3;
+            din <= din3;
+            wr <= wr3;
+            be <= be3;
+            port <= 3;
+            busy_buf <= 1;
+            state <= RAS;
         end
     end
 
@@ -105,12 +121,15 @@ always @(posedge clk) begin
                 // $display("sdram[%h] = %h", addr, mem[addr]);
             end else if (port == 1) 
                 dout1 <= mem[addr];
-            else 
+            else if (port == 2)
                 dout2 <= mem[addr];
+            else
+                dout3 <= mem[addr];
         end
         if (port == 0) ack0 <= req0;
         else if (port == 1) ack1 <= req1;
-        else ack2 <= req2;
+        else if (port == 2) ack2 <= req2;
+        else ack3 <= req3;
         state <= IDLE;
     end
 

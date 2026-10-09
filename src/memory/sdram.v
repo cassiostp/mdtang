@@ -50,7 +50,7 @@ module sdram
     input             refresh_allowed,      // Should be set to 1 to allow auto-refresh normally
     output            busy,
 
-    // 3 sets of access interfaces, with 0 having the highest priority
+    // 4 sets of access interfaces, with 0 having the highest priority
     input             req0,         // request toggle
     output reg        ack0,         // acknowledge toggle
     input             wr0,          // 1: write, 0: read
@@ -73,7 +73,17 @@ module sdram
     input      [24:1] addr2,       
     input      [15:0] din2,        
     output     [15:0] dout2,       
-    input       [1:0] be2
+    input       [1:0] be2,
+
+    // port 3: the battery-save channel. Lowest priority, so the game and the
+    // loaders never wait on it; it only ever runs in idle slots.
+    input             req3, 
+    output reg        ack3, 
+    input             wr3,
+    input      [24:1] addr3,       
+    input      [15:0] din3,        
+    output     [15:0] dout3,       
+    input       [1:0] be3
 );
 
 if (FREQ > 66_700_000 && CAS == 2)
@@ -92,20 +102,22 @@ reg [12:0] a;
 assign {SDRAM_nRAS, SDRAM_nCAS, SDRAM_nWE} = cmd;
 assign SDRAM_A = a;
 
-wire [2:0]  req [0:2]   = '{req0, req1, req2};
-wire [24:1] addr [0:2]  = '{addr0, addr1, addr2};
-wire [15:0] din [0:2]   = '{din0, din1, din2};
-wire        wr [0:2]    = '{wr0, wr1, wr2};
-wire [1:0]  be [0:2]    = '{be0, be1, be2};
+wire [2:0]  req [0:3]   = '{req0, req1, req2, req3};
+wire [24:1] addr [0:3]  = '{addr0, addr1, addr2, addr3};
+wire [15:0] din [0:3]   = '{din0, din1, din2, din3};
+wire        wr [0:3]    = '{wr0, wr1, wr2, wr3};
+wire [1:0]  be [0:3]    = '{be0, be1, be2, be3};
 
-reg [15:0] dout_buf[0:2];
+reg [15:0] dout_buf[0:3];
 reg data_ready;
 wire ready0 = req_id_buf == 0 ? data_ready : 1'b0;
 wire ready1 = req_id_buf == 1 ? data_ready : 1'b0;
 wire ready2 = req_id_buf == 2 ? data_ready : 1'b0;
+wire ready3 = req_id_buf == 3 ? data_ready : 1'b0;
 assign dout0 = ready0 ? dq_in : dout_buf[0];
 assign dout1 = ready1 ? dq_in : dout_buf[1];
 assign dout2 = ready2 ? dq_in : dout_buf[2];
+assign dout3 = ready3 ? dq_in : dout_buf[3];
 
 assign SDRAM_CKE = 1'b1;
 assign SDRAM_nCS = 1'b0;
@@ -157,8 +169,8 @@ end
 always @(posedge clk) begin
     reg new_req;
     reg [1:0] req_id;
-    new_req = (req2 ^ ack2) | (req1 ^ ack1) | (req0 ^ ack0);
-    req_id = req0 ^ ack0 ? 0 : req1 ^ ack1 ? 1 : 2;         // priority: 0 > 1 > 2
+    new_req = (req3 ^ ack3) | (req2 ^ ack2) | (req1 ^ ack1) | (req0 ^ ack0);
+    req_id = req0 ^ ack0 ? 0 : req1 ^ ack1 ? 1 : req2 ^ ack2 ? 2 : 3;   // priority: 0 > 1 > 2 > 3
 
     cycle <= cycle == 4'd15 ? 4'd15 : cycle + 4'd1;
     refresh_cnt <= refresh_cnt + 1;
@@ -229,6 +241,7 @@ always @(posedge clk) begin
                 0: ack0 <= req0;
                 1: ack1 <= req1;
                 2: ack2 <= req2;
+                3: ack3 <= req3;
                 default: ;
             endcase
             data_ready <= 1;
@@ -256,6 +269,7 @@ always @(posedge clk) begin
                 0: ack0 <= req0;
                 1: ack1 <= req1;
                 2: ack2 <= req2;
+                3: ack3 <= req3;
                 default: ;
             endcase
             busy_buf <= 0;

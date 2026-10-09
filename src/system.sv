@@ -188,6 +188,9 @@ reg [15:0] NO_DATA;
 reg  [4:0] BANK_REG[0:7];
 reg        BANK_ROM;
 reg        BANK_SRAM;
+reg        SRAM_WR;       // one-cycle pulse: an SRAM (battery RAM) write was issued
+
+assign BRAM_CHANGE = SRAM_WR;
 
 
 wire reset, hard_reset;
@@ -890,6 +893,7 @@ always @(posedge MCLK) begin
 		ZBUS_SEL <= 0;
 		BANK_ROM <= 0;
 		BANK_SRAM <= 0;
+		SRAM_WR <= 0;
 		mstate <= MBUS_IDLE;
 		pier_count <= 0;
 		MBUS_RNW <= 1;
@@ -908,6 +912,7 @@ always @(posedge MCLK) begin
 			if (cycle_cnt) cycle_cnt <= cycle_cnt - 1'd1;
 		end
 
+		SRAM_WR <= 0;       // pulses once per issued SRAM write; default here, set in MBUS_SELECT
 		if (M68K_AS_N) M68K_MBUS_DTACK_N <= 1;
 		if (~Z80_IO)   Z80_MBUS_DTACK_N  <= 1;
 		if (~VBUS_SEL) VDP_MBUS_DTACK_N  <= 1;
@@ -983,6 +988,7 @@ always @(posedge MCLK) begin
 						MEM_REQ <= ~MEM_ACK;
 						MEM_ADDR <= {8'b0_1000_001, MBUS_A[16:1]};
 						MEM_WE <= ~MBUS_RNW;
+						SRAM_WR <= ~MBUS_RNW;
 						MBUS_UDS_N <= M68K_UDS_N;
 						MBUS_LDS_N <= M68K_LDS_N;
 						mstate <= MBUS_SRAM_READ;
@@ -1004,6 +1010,7 @@ always @(posedge MCLK) begin
 						MEM_REQ <= ~MEM_ACK;
 						MEM_ADDR <= {8'b0_1000_001, MBUS_A[16:1]};
 						MEM_WE <= ~MBUS_RNW;
+						SRAM_WR <= ~MBUS_RNW;
 						MBUS_UDS_N <= M68K_UDS_N;
 						MBUS_LDS_N <= M68K_LDS_N;
 						mstate <= MBUS_SRAM_READ;
@@ -1035,6 +1042,7 @@ always @(posedge MCLK) begin
 						MEM_REQ <= ~MEM_ACK;
 						MEM_ADDR <= {8'b0_1000_001, MBUS_A[16:1]};
 						MEM_WE <= ~MBUS_RNW;
+						SRAM_WR <= ~MBUS_RNW;
 						MBUS_UDS_N <= M68K_UDS_N;
 						MBUS_LDS_N <= M68K_LDS_N;
 						mstate <= MBUS_SRAM_READ;
