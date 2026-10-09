@@ -38,7 +38,7 @@ module framebuffer #(
     output [7:0] overlay_y,
     input [14:0] overlay_color,     // BGR5
 
-    input scanlines,                // 1: darken every 3rd output line of a source line (core_config[16])
+    input scanlines,                // 1: darken the last output line of each source line (core_config[16])
 
     input [15:0] audio_left,        // audio sample
     input [15:0] audio_right,
@@ -139,7 +139,7 @@ reg active                  /* xsynthesis syn_keep=1 */;
 reg [10:0] xcnt             /* xsynthesis syn_keep=1 */;
 reg [10:0] ycnt             /* xsynthesis syn_keep=1 */;                  // fractional scaling counters
 reg [9:0] cy_r;
-reg [1:0] line_in_group;        // output line index (0..) within one source line's group
+reg last_line;                  // this output line is the last one of its source line
 reg scanlines_r, scanlines_rr;  // scanlines synchronized to the pixel clock domain
 always @(posedge clk_pixel) begin
     scanlines_r <= scanlines;
@@ -183,9 +183,9 @@ always @(posedge clk_pixel) begin
         if (ycnt_next >= 720) begin
             ycnt <= ycnt_next - 720;
             yy <= yy + 1;
-            line_in_group <= 0;         // start of a new source line
-        end else if (line_in_group != 2'd2)
-            line_in_group <= line_in_group + 1;
+        end
+        // scanlines: the next line is the last of its source line if one more step crosses 720
+        last_line <= (ycnt_next >= 720 ? ycnt_next - 11'd720 : ycnt_next) + (ycnt_next - ycnt) >= 11'd720;
     end
 
     if (cx == 0) begin
@@ -196,7 +196,7 @@ always @(posedge clk_pixel) begin
     if (cy == 0) begin
         yy <= 0;
         ycnt <= 0;
-        line_in_group <= 0;
+        last_line <= 0;
     end 
 
 end
@@ -211,7 +211,7 @@ always @(posedge clk_pixel) begin
             pixel = {mem_portB_rdata[COLOR_BITS*2 +: COLOR_BITS], {(8-COLOR_BITS){1'b0}},
                     mem_portB_rdata[COLOR_BITS   +: COLOR_BITS], {(8-COLOR_BITS){1'b0}},
                     mem_portB_rdata[0            +: COLOR_BITS], {(8-COLOR_BITS){1'b0}}};    // RGB4 to RGB8
-        if (~overlay & scanlines_rr & line_in_group == 2'd2)   // scanlines: darken the 3rd output line of each source line to ~50%
+        if (~overlay & scanlines_rr & last_line)   // scanlines: darken the last output line of each source line to ~50%
             pixel = {pixel[23:1], 1'b0, pixel[15:1], 1'b0, pixel[7:1], 1'b0};
         rgb <= pixel;
     end else
