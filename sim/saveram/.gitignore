@@ -1,3 +1,4 @@
 *.out
+*.vcd
 iosys_sim.v
 sdram_sim_ctrl.v

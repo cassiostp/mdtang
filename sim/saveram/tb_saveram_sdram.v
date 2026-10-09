@@ -146,8 +146,7 @@ begin
     while (ncap < want && t < 4_000_000) begin @(posedge clk); t = t + 1; end
     if (ncap < want) begin
         errs = errs + 1;
-        $display("FAIL: timeout waiting for byte %0d (have %0d)", want, ncap);
-        $finish;
+        $fatal(1, "FAIL: timeout waiting for byte %0d (have %0d)", want, ncap);
     end
 end
 endtask
@@ -295,7 +294,7 @@ initial begin
         core_read_check({6'd0, 7'd15, k[8:0]}, pat(8'hC3, k));
 
     if (errs == 0) $display("tb_saveram_sdram: PASS");
-    else $display("tb_saveram_sdram: FAIL, %0d errors", errs);
+    else $fatal(1, "tb_saveram_sdram: FAIL, %0d errors", errs);
     $finish;
 end
 

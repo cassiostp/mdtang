@@ -221,7 +221,7 @@ initial begin
     sv_read(16'h4001, 8'h71);
 
     if (errs == 0) $display("tb_sdram_save: PASS");
-    else $display("tb_sdram_save: FAIL, %0d errors", errs);
+    else $fatal(1, "tb_sdram_save: FAIL, %0d errors", errs);
     $finish;
 end
 
