@@ -103,7 +103,6 @@ wire [7:0]  loader_do;
 wire [11:0] joy_btns, joy2_btns;
 wire [11:0] joy_usb1, joy_usb2;
 wire [11:0] hid1, hid2;
-wire [31:0] core_config;
 `endif
 
 localparam FREQ = 53_750_000;
@@ -124,6 +123,7 @@ reg        md_on;
 wire [1:0] resolution;          // {V30, H40}, V30: verticle 240 vs 224, H40: horizontal 320 vs 256
 wire ce_pix, hblank, vblank, hsync;
 wire       pause_core;
+wire [31:0] core_config;        // from iosys
 wire       pause_menu = core_config[17];   // menu pause from iosys
 wire [3:0] red   /* xsynthesis syn_keep=1 */, 
            green /* xsynthesis syn_keep=1 */, 
@@ -136,6 +136,7 @@ wire [15:0] mem_data, mem_wdata;
 wire [1:0] mem_be;
 wire mem_req, mem_ack, mem_we;
 
+wire overlay;                   // the menu is shown: the console gets no buttons
 wire [11:0] joy1 = overlay ? 12'b0 : btn_snes2md(joy_btns | hid1 | joy_usb1);
 wire [11:0] joy2 = overlay ? 12'b0 : btn_snes2md(joy2_btns | hid2 | joy_usb2);
 
@@ -194,8 +195,8 @@ sdram_sim u_sdram (
 );
 
 // no OSD menu under verilator, never pause for menu
-wire overlay = 1'b0;
-wire [31:0] core_config = '0;
+assign overlay = 1'b0;
+assign core_config = '0;
 
 `else
 
@@ -239,7 +240,6 @@ sdram #(.FREQ(FREQ)) u_sdram (
 
 // iosys for menu, rom loading and other functions -----------------------------------------
 wire iosys_loaded;
-wire overlay;
 wire [7:0] overlay_x;
 wire [7:0] overlay_y;
 wire [14:0] overlay_color;
