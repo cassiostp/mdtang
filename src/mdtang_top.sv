@@ -155,8 +155,11 @@ assign sv_dword = '0;
 assign sv_q = sv_addr[0] ? sv_dword[7:0] : sv_dword[15:8];   // big-endian word: even byte = upper lane
 
 wire overlay;                   // the menu is shown: the console gets no buttons
-wire [11:0] joy1 = overlay ? 12'b0 : btn_snes2md(joy_btns | hid1 | joy_usb1);
-wire [11:0] joy2 = overlay ? 12'b0 : btn_snes2md(joy2_btns | hid2 | joy_usb2);
+// ...nor while core_config[22] asks (the firmware's scanline preview runs the
+// game with the menu hidden)
+wire pads_muted = overlay | core_config[22];
+wire [11:0] joy1 = pads_muted ? 12'b0 : btn_snes2md(joy_btns | hid1 | joy_usb1);
+wire [11:0] joy2 = pads_muted ? 12'b0 : btn_snes2md(joy2_btns | hid2 | joy_usb2);
 
 // MegaDrive system -------------------------------------------------------------------
 system megadrive (
