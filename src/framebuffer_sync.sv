@@ -38,7 +38,10 @@ module framebuffer #(
     output [7:0] overlay_y,
     input [14:0] overlay_color,     // BGR5
 
-    input scanlines,                // 1: darken the last output line of each source line (core_config[16])
+    input scanlines,                // core_config[16]: scanlines on
+    input [1:0] sl_darkness,        // core_config[19:18]: 25, 50, 75, 100 % dark
+    input sl_thick,                 // core_config[20]: thick lines
+    input sl_out,                   // core_config[21]: dark output rows instead of an integer scale
 
     input [15:0] audio_left,        // audio sample
     input [15:0] audio_right,
@@ -81,7 +84,8 @@ end
 // BRAM port B read
 reg [$clog2(WIDTH)-1:0] xx  /* xsynthesis syn_keep=1 */; // scaled-down pixel position
 reg [$clog2(HEIGHT)-1:0] yy /* xsynthesis syn_keep=1 */;
-assign mem_portB_addr = yy[4:0] * WIDTH + xx;
+reg [7:0] yy_s;             // source line to show (scanlines.v picks it for the integer scale)
+assign mem_portB_addr = yy_s[4:0] * WIDTH + xx;
 always @(posedge clk_pixel) begin
     mem_portB_rdata <= mem[mem_portB_addr];
 end
@@ -89,6 +93,7 @@ end
 // Video synchronization
 reg sync_done = 1'b0;
 reg hdmi_first_line, hdmi_first_line_r, hdmi_first_line_rr;
+wire [9:0] sl_pic_top;          // first row of the picture, from scanlines.v
 always @(posedge clk) begin
     hdmi_first_line_r <= hdmi_first_line;
     hdmi_first_line_rr <= hdmi_first_line_r;
@@ -104,7 +109,7 @@ always @(posedge clk) begin
     if (y == 100) sync_done <= 1'b0;                    // reset sync_done for next frame
 end
 always @(posedge clk_pixel) begin
-    if (cy == 0 && cx >= 160)                           // start position of 4:3 frame
+    if (cy == sl_pic_top && cx >= 160)                  // first row of the picture, start position of 4:3 frame
         hdmi_first_line <= 1;
     else
         hdmi_first_line <= 0;
@@ -133,26 +138,42 @@ end
 
 //
 // Video
+// Scale 256/320 x 224/240 to 960x720 (4:3), see scanlines.v for the scanline geometry:
+// with scanlines on, 3 output rows per source line, 896x672 (224 lines) or 960x720 (240 lines).
 //
-reg [23:0] rgb;             // actual RGB output
+wire [23:0] rgb;            // actual RGB output
+reg [23:0] rgb_pre;         // before the scanline darkening
+reg dark_pre;
 reg active                  /* xsynthesis syn_keep=1 */;
 reg [10:0] xcnt             /* xsynthesis syn_keep=1 */;
 reg [10:0] ycnt             /* xsynthesis syn_keep=1 */;                  // fractional scaling counters
 reg [9:0] cy_r;
-reg last_line;                  // this output line is the last one of its source line
-reg scanlines_r, scanlines_rr;  // scanlines synchronized to the pixel clock domain
-always @(posedge clk_pixel) begin
-    scanlines_r <= scanlines;
-    scanlines_rr <= scanlines_r;
-end
+
+// scanlines: sl_geom frames are scaled 3 rows per source line
+wire sl_geom, sl_show, sl_dark;
+wire [7:0] sl_yy;
+wire [1:0] sl_dk;
+sl_rows sl (
+    .clk(clk_pixel), .cy(cy),
+    .cfg_on(scanlines), .cfg_dark(sl_darkness), .cfg_thick(sl_thick), .cfg_out(sl_out), .hide(overlay),
+    .rows(3'd3), .dark_thin(3'd1), .dark_thick(3'd2),
+    .lines(height >= 10'd232 ? 8'd240 : 8'd224), .top(height >= 10'd232 ? 10'd0 : 10'd24),
+    .geom(sl_geom), .pic_top(sl_pic_top), .yy(sl_yy), .show(sl_show), .dark(sl_dark), .darkness(sl_dk)
+);
+always @(posedge clk_pixel) yy_s <= sl_geom ? sl_yy : yy;
+
 assign overlay_x = xx;
-assign overlay_y = yy;
-localparam XSTART = (1280 - 960) / 2;   // 960:720 = 4:3
-localparam XSTOP = (1280 + 960) / 2;
+assign overlay_y = yy_s;
+// 4:3 on 720 rows, 4:3 on 672 rows
+wire [11:0] XSIZE  = (sl_geom && sl_pic_top != 10'd0) ? 12'd896 : 12'd960;
+wire [11:0] XSTART = (12'd1280 - XSIZE) >> 1;
+wire [11:0] XSTOP  = (12'd1280 + XSIZE) >> 1;
 
 // address calculation
 // Assume the video occupies fully on the Y direction, we are upscaling the video by `720/height`.
 // xcnt and ycnt are fractional scaling counters.
+// The scanline darkening is a register stage after rgb_pre, so active starts one clock
+// earlier than the picture it frames.
 always @(posedge clk_pixel) begin
     reg active_t;
     reg [10:0] xcnt_next;
@@ -161,18 +182,18 @@ always @(posedge clk_pixel) begin
     ycnt_next = ycnt + (overlay ? 224 : height);
 
     active_t = 0;
-    if (cx == XSTART - 1) begin
+    if ({1'b0, cx} == XSTART - 12'd2) begin
         active_t = 1;
         active <= 1;
-    end else if (cx == XSTOP - 1) begin
+    end else if ({1'b0, cx} == XSTOP - 12'd2) begin
         active_t = 0;
         active <= 0;
     end
 
     if (active_t | active) begin        // increment xx
         xcnt <= xcnt_next;
-        if (xcnt_next >= 960) begin
-            xcnt <= xcnt_next - 960;
+        if (xcnt_next >= XSIZE) begin
+            xcnt <= xcnt_next - XSIZE;
             xx <= xx + 1;
         end
     end
@@ -184,8 +205,6 @@ always @(posedge clk_pixel) begin
             ycnt <= ycnt_next - 720;
             yy <= yy + 1;
         end
-        // scanlines: the next line is the last of its source line if one more step crosses 720
-        last_line <= (ycnt_next >= 720 ? ycnt_next - 11'd720 : ycnt_next) + (ycnt_next - ycnt) >= 11'd720;
     end
 
     if (cx == 0) begin
@@ -196,27 +215,24 @@ always @(posedge clk_pixel) begin
     if (cy == 0) begin
         yy <= 0;
         ycnt <= 0;
-        last_line <= 0;
     end 
 
 end
 
 // calc rgb value to hdmi
 always @(posedge clk_pixel) begin
-    reg [23:0] pixel;
-    if (active) begin
+    if (active & sl_show) begin
         if (overlay)
-            pixel = {overlay_color[4:0],3'b0,overlay_color[9:5],3'b0,overlay_color[14:10],3'b0};       // BGR5 to RGB8
+            rgb_pre <= {overlay_color[4:0],3'b0,overlay_color[9:5],3'b0,overlay_color[14:10],3'b0};       // BGR5 to RGB8
         else
-            pixel = {mem_portB_rdata[COLOR_BITS*2 +: COLOR_BITS], {(8-COLOR_BITS){1'b0}},
+            rgb_pre <= {mem_portB_rdata[COLOR_BITS*2 +: COLOR_BITS], {(8-COLOR_BITS){1'b0}},
                     mem_portB_rdata[COLOR_BITS   +: COLOR_BITS], {(8-COLOR_BITS){1'b0}},
                     mem_portB_rdata[0            +: COLOR_BITS], {(8-COLOR_BITS){1'b0}}};    // RGB4 to RGB8
-        if (~overlay & scanlines_rr & last_line)   // scanlines: darken the last output line of each source line to ~50%
-            pixel = {pixel[23:1], 1'b0, pixel[15:1], 1'b0, pixel[7:1], 1'b0};
-        rgb <= pixel;
     end else
-        rgb <= 24'h303030;
+        rgb_pre <= 24'h303030;
+    dark_pre <= active & sl_show & ~overlay & sl_dark;
 end
+sl_dim dim (.clk(clk_pixel), .rgb_in(rgb_pre), .dark(dark_pre), .darkness(sl_dk), .rgb_out(rgb));
 
 // HDMI output.
 logic[2:0] tmds;

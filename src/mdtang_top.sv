@@ -359,7 +359,7 @@ framebuffer #(
     .audio_left(pause_menu ? 16'd0 : audio_left), .audio_right(pause_menu ? 16'd0 : audio_right),    // silent while paused
     .overlay(overlay), .overlay_x(overlay_x), .overlay_y(overlay_y), .overlay_color(overlay_color),
     .pause_core(pause_core),
-    .scanlines(core_config[16]),
+    .scanlines(core_config[16]), .sl_darkness(core_config[19:18]), .sl_thick(core_config[20]), .sl_out(core_config[21]),
     
     .tmds_clk_n(tmds_clk_n), .tmds_clk_p(tmds_clk_p),
     .tmds_d_n(tmds_d_n), .tmds_d_p(tmds_d_p)
