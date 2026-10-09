@@ -103,6 +103,7 @@ wire [7:0]  loader_do;
 wire [11:0] joy_btns, joy2_btns;
 wire [11:0] joy_usb1, joy_usb2;
 wire [11:0] hid1, hid2;
+wire [31:0] core_config;
 `endif
 
 localparam FREQ = 53_750_000;
@@ -123,7 +124,7 @@ reg        md_on;
 wire [1:0] resolution;          // {V30, H40}, V30: verticle 240 vs 224, H40: horizontal 320 vs 256
 wire ce_pix, hblank, vblank, hsync;
 wire       pause_core;
-wire       pause_menu = pause_core | overlay;
+wire       pause_menu = core_config[17];   // menu pause from iosys
 wire [3:0] red   /* xsynthesis syn_keep=1 */, 
            green /* xsynthesis syn_keep=1 */, 
            blue  /* xsynthesis syn_keep=1 */;
@@ -135,8 +136,8 @@ wire [15:0] mem_data, mem_wdata;
 wire [1:0] mem_be;
 wire mem_req, mem_ack, mem_we;
 
-wire [11:0] joy1 = btn_snes2md(joy_btns | hid1 | joy_usb1);
-wire [11:0] joy2 = btn_snes2md(joy2_btns | hid2 | joy_usb2);
+wire [11:0] joy1 = overlay ? 12'b0 : btn_snes2md(joy_btns | hid1 | joy_usb1);
+wire [11:0] joy2 = overlay ? 12'b0 : btn_snes2md(joy2_btns | hid2 | joy_usb2);
 
 // MegaDrive system -------------------------------------------------------------------
 system megadrive (
@@ -155,7 +156,7 @@ system megadrive (
     .MEM_ADDR(mem_addr), .MEM_DATA(mem_data), .MEM_WDATA(mem_wdata), .MEM_WE(mem_we), .MEM_BE(mem_be),
     .MEM_REQ(mem_req), .MEM_ACK(mem_ack), .ROMSZ(loader_addr[21:1]),
     .EN_HIFI_PCM('0), .LADDER('0), .OBJ_LIMIT_HIGH('0), .TRANSP_DETECT(),
-    .PAUSE_EN(pause_menu), .BGA_EN('1), .BGB_EN('1), .SPR_EN('1), .DBG_M68K_A(), .DBG_VBUS_A()
+    .PAUSE_EN(pause_core | pause_menu), .PAUSE_ALL(pause_menu), .BGA_EN('1), .BGB_EN('1), .SPR_EN('1), .DBG_M68K_A(), .DBG_VBUS_A()
 );
 
 
@@ -174,7 +175,8 @@ always @(posedge clk_sys) begin
         loader_addr_next <= 0;
         md_on <= 0;
     end else if (!loading && loading_r) begin   // loading finished, turn megadrive on
-        loader_addr <= loader_addr_next;        // this is the proper ROMSZ
+        if (loader_addr_next != 0)
+            loader_addr <= loader_addr_next;    // this is the proper ROMSZ; soft reset sends no data and must keep the old size
         md_on <= 1;
     end
 end
@@ -193,6 +195,7 @@ sdram_sim u_sdram (
 
 // no OSD menu under verilator, never pause for menu
 wire overlay = 1'b0;
+wire [31:0] core_config = '0;
 
 `else
 
@@ -244,6 +247,7 @@ wire [14:0] overlay_color;
 iosys_bl616 #(.CORE_ID(4), .FREQ(FREQ), .COLOR_LOGO(15'b00000_00100_11111)) iosys (
     .clk(clk_sys), .hclk(hclk), .resetn(~reset),
     .overlay(overlay), .overlay_x(overlay_x), .overlay_y(overlay_y), .overlay_color(overlay_color),
+    .core_config(core_config),
     .joy1(joy_btns | joy_usb1), .joy2(joy2_btns | joy_usb2), .hid1(hid1), .hid2(hid2),
     .rom_loading(loading), .rom_do(loader_do), .rom_do_valid(loader_do_valid), 
     .uart_tx(UART_TXD), .uart_rx(UART_RXD)
@@ -326,7 +330,7 @@ framebuffer #(
     .clk(clk_sys), .resetn(~reset), .clk_pixel(hclk), .clk_5x_pixel(hclk5),
     .ce_pix(ce_pix & hsync_seen), .r(red), .g(green), .b(blue), .x(x), .y(y), 
     .width(resolution[0] ? 320 : 256), .height(resolution[1] ? 240 : 224),      // resolution: 0: 256x224, 1: 320x224, 2: 256x240, 3: 320x240
-    .audio_left(audio_left), .audio_right(audio_right),
+    .audio_left(pause_menu ? 16'd0 : audio_left), .audio_right(pause_menu ? 16'd0 : audio_right),    // silent while paused
     .overlay(overlay), .overlay_x(overlay_x), .overlay_y(overlay_y), .overlay_color(overlay_color),
     .pause_core(pause_core),
     
