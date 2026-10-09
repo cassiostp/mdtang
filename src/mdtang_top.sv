@@ -123,6 +123,7 @@ reg        md_on;
 wire [1:0] resolution;          // {V30, H40}, V30: verticle 240 vs 224, H40: horizontal 320 vs 256
 wire ce_pix, hblank, vblank, hsync;
 wire       pause_core;
+wire       pause_menu = pause_core | overlay;
 wire [3:0] red   /* xsynthesis syn_keep=1 */, 
            green /* xsynthesis syn_keep=1 */, 
            blue  /* xsynthesis syn_keep=1 */;
@@ -154,7 +155,7 @@ system megadrive (
     .MEM_ADDR(mem_addr), .MEM_DATA(mem_data), .MEM_WDATA(mem_wdata), .MEM_WE(mem_we), .MEM_BE(mem_be),
     .MEM_REQ(mem_req), .MEM_ACK(mem_ack), .ROMSZ(loader_addr[21:1]),
     .EN_HIFI_PCM('0), .LADDER('0), .OBJ_LIMIT_HIGH('0), .TRANSP_DETECT(),
-    .PAUSE_EN(pause_core), .BGA_EN('1), .BGB_EN('1), .SPR_EN('1), .DBG_M68K_A(), .DBG_VBUS_A()
+    .PAUSE_EN(pause_menu), .BGA_EN('1), .BGB_EN('1), .SPR_EN('1), .DBG_M68K_A(), .DBG_VBUS_A()
 );
 
 
@@ -189,6 +190,9 @@ sdram_sim u_sdram (
     .addr2(), .req2(), .ack2(), .wr2(), .be2(),
 	.din2('0), .dout2()
 );
+
+// no OSD menu under verilator, never pause for menu
+wire overlay = 1'b0;
 
 `else
 
