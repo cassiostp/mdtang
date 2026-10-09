@@ -38,7 +38,7 @@ module framebuffer #(
     output [7:0] overlay_y,
     input [14:0] overlay_color,     // BGR5
 
-    input scanlines,                // 1: dim odd lines to ~25% (core_config[16])
+    input scanlines,                // 1: darken every 3rd output line of a source line (core_config[16])
 
     input [15:0] audio_left,        // audio sample
     input [15:0] audio_right,
@@ -139,6 +139,7 @@ reg active                  /* xsynthesis syn_keep=1 */;
 reg [10:0] xcnt             /* xsynthesis syn_keep=1 */;
 reg [10:0] ycnt             /* xsynthesis syn_keep=1 */;                  // fractional scaling counters
 reg [9:0] cy_r;
+reg [1:0] line_in_group;        // output line index (0..) within one source line's group
 reg scanlines_r, scanlines_rr;  // scanlines synchronized to the pixel clock domain
 always @(posedge clk_pixel) begin
     scanlines_r <= scanlines;
@@ -210,8 +211,8 @@ always @(posedge clk_pixel) begin
             pixel = {mem_portB_rdata[COLOR_BITS*2 +: COLOR_BITS], {(8-COLOR_BITS){1'b0}},
                     mem_portB_rdata[COLOR_BITS   +: COLOR_BITS], {(8-COLOR_BITS){1'b0}},
                     mem_portB_rdata[0            +: COLOR_BITS], {(8-COLOR_BITS){1'b0}}};    // RGB4 to RGB8
-        if (~overlay & scanlines_rr & yy[0])   // scanlines: dim odd lines to ~25%
-            pixel = pixel - {1'b0, pixel[23:1]} - {2'b0, pixel[23:2]};
+        if (~overlay & scanlines_rr & line_in_group == 2'd2)   // scanlines: darken the 3rd output line of each source line to ~50%
+            pixel = {pixel[23:1], 1'b0, pixel[15:1], 1'b0, pixel[7:1], 1'b0};
         rgb <= pixel;
     end else
         rgb <= 24'h303030;
