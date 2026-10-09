@@ -243,15 +243,13 @@ wire iosys_loaded;
 wire [7:0] overlay_x;
 wire [7:0] overlay_y;
 wire [14:0] overlay_color;
-wire [31:0] core_config;        // option bits from BL616, see iosys_bl616. bit 16: scanlines
 
 iosys_bl616 #(.CORE_ID(4), .FREQ(FREQ), .COLOR_LOGO(15'b00000_00100_11111)) iosys (
     .clk(clk_sys), .hclk(hclk), .resetn(~reset),
     .overlay(overlay), .overlay_x(overlay_x), .overlay_y(overlay_y), .overlay_color(overlay_color),
     .core_config(core_config),
     .joy1(joy_btns | joy_usb1), .joy2(joy2_btns | joy_usb2), .hid1(hid1), .hid2(hid2),
-    .rom_loading(loading), .rom_do(loader_do), .rom_do_valid(loader_do_valid),
-    .core_config(core_config),
+    .rom_loading(loading), .rom_do(loader_do), .rom_do_valid(loader_do_valid), 
     .uart_tx(UART_TXD), .uart_rx(UART_RXD)
 );
 
