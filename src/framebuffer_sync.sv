@@ -38,6 +38,8 @@ module framebuffer #(
     output [7:0] overlay_y,
     input [14:0] overlay_color,     // BGR5
 
+    input scanlines,                // 1: dim odd lines to ~25% (core_config[16])
+
     input [15:0] audio_left,        // audio sample
     input [15:0] audio_right,
 
@@ -137,6 +139,11 @@ reg active                  /* xsynthesis syn_keep=1 */;
 reg [10:0] xcnt             /* xsynthesis syn_keep=1 */;
 reg [10:0] ycnt             /* xsynthesis syn_keep=1 */;                  // fractional scaling counters
 reg [9:0] cy_r;
+reg scanlines_r, scanlines_rr;  // scanlines synchronized to the pixel clock domain
+always @(posedge clk_pixel) begin
+    scanlines_r <= scanlines;
+    scanlines_rr <= scanlines_r;
+end
 assign overlay_x = xx;
 assign overlay_y = yy;
 localparam XSTART = (1280 - 960) / 2;   // 960:720 = 4:3
@@ -175,7 +182,9 @@ always @(posedge clk_pixel) begin
         if (ycnt_next >= 720) begin
             ycnt <= ycnt_next - 720;
             yy <= yy + 1;
-        end
+            line_in_group <= 0;         // start of a new source line
+        end else if (line_in_group != 2'd2)
+            line_in_group <= line_in_group + 1;
     end
 
     if (cx == 0) begin
@@ -186,19 +195,24 @@ always @(posedge clk_pixel) begin
     if (cy == 0) begin
         yy <= 0;
         ycnt <= 0;
+        line_in_group <= 0;
     end 
 
 end
 
 // calc rgb value to hdmi
 always @(posedge clk_pixel) begin
+    reg [23:0] pixel;
     if (active) begin
         if (overlay)
-            rgb <= {overlay_color[4:0],3'b0,overlay_color[9:5],3'b0,overlay_color[14:10],3'b0};       // BGR5 to RGB8
+            pixel = {overlay_color[4:0],3'b0,overlay_color[9:5],3'b0,overlay_color[14:10],3'b0};       // BGR5 to RGB8
         else
-            rgb <= {mem_portB_rdata[COLOR_BITS*2 +: COLOR_BITS], {(8-COLOR_BITS){1'b0}},
+            pixel = {mem_portB_rdata[COLOR_BITS*2 +: COLOR_BITS], {(8-COLOR_BITS){1'b0}},
                     mem_portB_rdata[COLOR_BITS   +: COLOR_BITS], {(8-COLOR_BITS){1'b0}},
                     mem_portB_rdata[0            +: COLOR_BITS], {(8-COLOR_BITS){1'b0}}};    // RGB4 to RGB8
+        if (~overlay & scanlines_rr & yy[0])   // scanlines: dim odd lines to ~25%
+            pixel = pixel - {1'b0, pixel[23:1]} - {2'b0, pixel[23:2]};
+        rgb <= pixel;
     end else
         rgb <= 24'h303030;
 end
