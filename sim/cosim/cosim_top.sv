@@ -58,8 +58,8 @@
 //   with game and loader traffic.
 //
 // OBSERVABILITY (all real unless noted)
-//   core_config/overlay: straight out of iosys (expect-config-bit reads the
-//   real register). rom_bytes: ROM payload bytes consumed (firmware streams
+//   core_config/video_config/overlay: straight out of iosys (expect-config-bit
+//   reads the real register). rom_bytes: ROM payload bytes consumed (firmware streams
 //   the ROM; no loader parses it here). sdram_busy: controller init.
 //   game_joy1/2: the pads as mdtang_top hands them to the game (muted while
 //   the overlay is up OR core_config[22] -- the scanline-preview mute), plus
@@ -81,6 +81,7 @@ module cosim_top (
     input wire [15:0] cosim_core_id,
 
     output wire [31:0] core_config,
+    output wire [31:0] video_config,
     output wire overlay,
     output wire sdram_busy,
     output reg [31:0] rom_bytes,
@@ -189,6 +190,7 @@ iosys_bl616_cosim #(
     .sv_ack(sv_ack),
 
     .core_config(core_config),
+    .video_config(video_config),
     .uart_rx(uart_rx_iosys),
     .uart_tx(uart_tx_iosys)
 );
