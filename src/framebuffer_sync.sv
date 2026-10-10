@@ -184,7 +184,7 @@ wire [11:0] XSTOP  = (12'd1280 + XSIZE) >> 1;
 // than that, at XSTART - 1 - FX_LAT. The xx/xcnt counters, and so the line buffer read and the
 // overlay lookup, run with it. The source line (yy_s) only changes at the start of an output
 // row, far from the picture, so which line is read on which row does not move.
-localparam FX_LAT = 10;     // clocks from rgb_pre to rgb, see video_fx.v
+localparam FX_LAT = 11;     // clocks from rgb_pre to rgb, see video_fx.v
 always @(posedge clk_pixel) begin
     reg active_t;
     reg [10:0] xcnt_next;
