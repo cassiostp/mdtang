@@ -124,6 +124,7 @@ wire [1:0] resolution;          // {V30, H40}, V30: verticle 240 vs 224, H40: ho
 wire ce_pix, hblank, vblank, hsync;
 wire       pause_core;
 wire [31:0] core_config;        // from iosys
+wire [31:0] video_config;       // from iosys
 wire       pause_menu = core_config[17];   // menu pause from iosys
 wire [3:0] red   /* xsynthesis syn_keep=1 */, 
            green /* xsynthesis syn_keep=1 */, 
@@ -220,6 +221,7 @@ sdram_sim u_sdram (
 // no OSD menu under verilator, never pause for menu
 assign overlay = 1'b0;
 assign core_config = '0;
+assign video_config = '0;
 
 `else
 
@@ -274,7 +276,7 @@ iosys_bl616 #(.CORE_ID(4), .FREQ(FREQ), .COLOR_LOGO(15'b00000_00100_11111),
               .SAVE_IF(1), .SAVE_AW(16), .SAVE_SYNC(0)) iosys (
     .clk(clk_sys), .hclk(hclk), .resetn(~reset),
     .overlay(overlay), .overlay_x(overlay_x), .overlay_y(overlay_y), .overlay_color(overlay_color),
-    .core_config(core_config),
+    .core_config(core_config), .video_config(video_config),
     .joy1(joy_btns | joy_usb1), .joy2(joy2_btns | joy_usb2), .hid1(hid1), .hid2(hid2),
     .rom_loading(loading), .rom_do(loader_do), .rom_do_valid(loader_do_valid), 
     .sv_addr(sv_addr), .sv_din(sv_din), .sv_we(sv_we), .sv_q(sv_q),
@@ -363,6 +365,7 @@ framebuffer #(
     .overlay(overlay), .overlay_x(overlay_x), .overlay_y(overlay_y), .overlay_color(overlay_color),
     .pause_core(pause_core),
     .scanlines(core_config[16]), .sl_darkness(core_config[19:18]), .sl_thick(core_config[20]), .sl_out(core_config[21]),
+    .video_config(video_config),
     
     .tmds_clk_n(tmds_clk_n), .tmds_clk_p(tmds_clk_p),
     .tmds_d_n(tmds_d_n), .tmds_d_p(tmds_d_p)
