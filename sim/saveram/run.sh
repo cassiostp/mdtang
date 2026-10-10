@@ -1,6 +1,6 @@
 #!/bin/sh
 # Battery-save sims (iverilog). From this directory:
-#   ./run.sh              compile and run both testbenches
+#   ./run.sh              compile and run all three testbenches
 # On this machine iverilog lives in docker:
 #   docker run --rm -v <repo>:/w -w /w/sim/saveram tangcore-iv:1 ./run.sh
 # Gowin tolerates the "input reg" port declaration in iosys; iverilog does not,
@@ -26,3 +26,12 @@ vvp tb_saveram_sdram.out
 iverilog -g2012 -DSIM -o tb_sdram_save.out \
     tb_sdram_save.v sdram_sim_ctrl.v
 vvp tb_sdram_save.out
+# System test: real iosys + real sdram.v port 3 + MD-bus-like port-0 traffic +
+# an MCU model. The sim copy shortens iosys's 20 ms joypad rate limit so pad
+# changes are due within ~0.2 ms of sim time.
+sed -e 's|localparam JOY_UPDATE_INTERVAL = 50_000_000 / 50;|localparam JOY_UPDATE_INTERVAL = 10_000;|' \
+    iosys_sim.v > iosys_sys_sim.v
+grep -q "JOY_UPDATE_INTERVAL = 10_000" iosys_sys_sim.v
+iverilog -g2012 -DSIM -o tb_system_save.out \
+    tb_system_save.v iosys_sys_sim.v sdram_sim_ctrl.v $RTL/iosys/uart_fixed.v $RTL/iosys/textdisp.v gowin_dpb_menu_sim.v
+vvp tb_system_save.out
