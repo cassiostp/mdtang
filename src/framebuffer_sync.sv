@@ -97,13 +97,19 @@ end
 // Video synchronization
 reg sync_done = 1'b0;
 reg hdmi_first_line, hdmi_first_line_r, hdmi_first_line_rr;
+// The smoothing reads the line below the one it shows, which the core must have written by then.
+// It writes line 1 only after it is released at the first row of the picture, so with the
+// smoothing on it halts one line later, on starting line 2: line 1 is done when line 0 is shown.
+reg [1:0] sm_on_s = 2'b00;
+always @(posedge clk) sm_on_s <= {sm_on_s[0], sm_mode != 2'd0};
+wire [7:0] sync_y = sm_on_s[1] ? 8'd2 : 8'd1;
 wire [9:0] sl_pic_top;          // first row of the picture, from scanlines.v
 always @(posedge clk) begin
     hdmi_first_line_r <= hdmi_first_line;
     hdmi_first_line_rr <= hdmi_first_line_r;
     if (~sync_done) begin
         if (~pause_core) begin
-            if (y == 1 && x == 0)                           // halt on core starting line 1
+            if (y == sync_y && x == 0)                      // halt on core starting line 1 (2 with smoothing)
                 pause_core <= 1'b1;
         end else if (hdmi_first_line_rr && pause_core) begin     // resume when HDMI start line 0
             pause_core <= 1'b0;
