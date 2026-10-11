@@ -6,12 +6,21 @@ mask / grid definitions in the header of video_fx.v), not from the Verilog.
   model.py gen            write the test vectors (vec_*.hex) for tb_video_fx.v
   model.py check LOGFILE  check a log of the filters running inside a scaler
                           (written by tb_md_fx.v) against the model
+  model.py check_smooth LOGFILE SRCFILE...
+                          check logs of the smoothing running inside the scaler
+                          (tb_md_smooth.v: md_smooth_WxH.log, md_src_WxH.hex) against the model
+
+The smoothing (video_config[19:18], see the header of src/smooth.v) is modelled from its
+definition: the area an output pixel covers in the source picture, the weights of the source
+pixels it overlaps (sharp) or the bilinear weights at its centre (soft), in 1/256 and rounded
+to nearest, the vertical blend first and then the horizontal one, each rounded to nearest.
 
 Run with python3 -I.
 """
 import os
 import random
 import sys
+from fractions import Fraction
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -221,6 +230,278 @@ def gen():
     print("model: %d cases, colour error vs real arithmetic <= %.2f LSB" % (len(cases), worst))
 
 
+# ---- smoothing ---------------------------------------------------------------------------
+
+RING_W = 320                        # the line buffer: 32 rows of 320 pixels, 12 bit RGB4
+
+
+def load_src(path, cols, lines):
+    """the line buffer dumped by the testbench, as RGB8 (each 4 bit channel in the high nibble):
+    source line l is ring row l % 32"""
+    vals = []
+    with open(path) as f:
+        for line in f:
+            t = line.split()
+            if t and t[0][0] not in "@/":
+                vals.append(int(t[0], 16))
+    assert len(vals) == 32 * RING_W, len(vals)
+    def rgb(v):
+        return ((v >> 8 & 15) << 4, (v >> 4 & 15) << 4, (v & 15) << 4)
+    return [[rgb(vals[(l % 32) * RING_W + x]) for x in range(cols)] for l in range(lines)]
+
+
+def blend_weight(n, step, size, soft, count):
+    """Output pixel n of one axis, in which a source pixel is `size` units and an output pixel
+    `step` units. Returns (cur, nbr, w): the source pixel the scaler shows (the one that holds
+    the start of the output pixel), the neighbour it is blended with and the weight of the
+    neighbour in 1/256. sharp: the share of the output pixel in the next source pixel. soft:
+    the distance from the output pixel's centre to the source pixel's centre, as a share of a
+    source pixel, the neighbour being on the side of the output pixel's centre. A neighbour
+    that does not exist (past the first or last of `count`) has weight 0."""
+    f = Fraction(step, size)                    # source pixels per output pixel
+    left = n * f
+    cur = left.numerator // left.denominator
+    if not soft:
+        over = left + f - (cur + 1)
+        frac = max(Fraction(0), over) / f
+        nbr = cur + 1
+    else:
+        d = left + f / 2 - (cur + Fraction(1, 2))
+        nbr = cur + 1 if d >= 0 else cur - 1
+        frac = abs(d)
+    w = int(frac * 256 + Fraction(1, 2))        # rounded to nearest, half up
+    if nbr < 0 or nbr >= count:
+        w, nbr = 0, cur
+    return cur, nbr, w
+
+
+def lerp(c, n, w):
+    """c moved towards n by w / 256, rounded to nearest (half up)"""
+    return c + ((n - c) * w + 128) // 256
+
+
+def smooth_geometry(cols, lines, geom):
+    """(columns, left column of the picture, rows, top row of the picture) of the output: the
+    picture is 960 x 720 (4:3), and in the integer scale 3 rows per source line, 896 x 672 for
+    224 lines and 960 x 720 for 240"""
+    if geom and lines == 224:
+        return 896, 192, 672, 24
+    return 960, 160, 720, 0
+
+
+def smoothed(cols, lines, geom):
+    """smooth.v needs source columns of at least 3 output columns: the 320 pixel wide picture
+    in the 896 columns of the integer scale (2.8 per pixel) is shown unsmoothed"""
+    return smooth_geometry(cols, lines, geom)[0] >= 3 * cols
+
+
+class Smooth:
+    """the smoothed picture of a source image: pixel(mode, geom, m, n) is the output pixel at
+    column m, row n of the picture (mode 0 is the nearest neighbour the scaler shows)"""
+
+    def __init__(self, src, cols, lines):
+        self.src = src
+        self.cols, self.lines = cols, lines
+        self.vrows = {}
+        self.hw = {}
+
+    def vrow(self, mode, geom, n):
+        key = (mode, geom, n)
+        if key not in self.vrows:
+            if geom:
+                cur, nbr, w = blend_weight(n, 1, 3, mode == 2, self.lines)
+            else:
+                cur, nbr, w = blend_weight(n, self.lines, 720, mode == 2, self.lines)
+            if mode not in (1, 2) or not smoothed(self.cols, self.lines, geom):
+                w = 0
+            a, b = self.src[cur], self.src[nbr]
+            self.vrows[key] = [tuple(lerp(a[c][k], b[c][k], w) for k in range(3)) for c in range(self.cols)]
+        return self.vrows[key]
+
+    def pixel(self, mode, geom, m, n):
+        key = (mode, geom, m)
+        if key not in self.hw:
+            xsize = smooth_geometry(self.cols, self.lines, geom)[0]
+            cur, nbr, w = blend_weight(m, self.cols, xsize, mode == 2, self.cols)
+            on = mode in (1, 2) and smoothed(self.cols, self.lines, geom)
+            self.hw[key] = (cur, nbr, w if on else 0)
+        cur, nbr, w = self.hw[key]
+        v = self.vrow(mode, geom, n)
+        return tuple(lerp(v[cur][k], v[nbr][k], w) for k in range(3))
+
+
+def rtl_weight(pos, step, size, soft):
+    """the weight arithmetic of smooth_axis (src/smooth.v): the numerator times a 16 bit
+    reciprocal; used to check that the constants it is given are exact"""
+    if soft:
+        num = abs(2 * pos + step - size)
+        k = (65536 * 128 + size // 2) // size
+    else:
+        num = max(0, pos + step - size)
+        k = (65536 * 256 + step // 2) // step
+    return min(255, (num * k + 32768) >> 16)
+
+
+def selfcheck_smooth():
+    """hand-computed weights; the reciprocal arithmetic against the exact fractions"""
+    # 960 columns, 3.75 per source pixel: 0.8 of the way through source pixel 0 at m = 3,
+    # a quarter of that output pixel is in source pixel 1
+    assert blend_weight(3, 256, 960, False, 256) == (0, 1, 64)
+    assert blend_weight(4, 256, 960, False, 256) == (1, 2, 0)
+    assert blend_weight(7, 256, 960, False, 256) == (1, 2, 128)      # [1.8667, 2.1333): half in pixel 2
+    assert blend_weight(3, 256, 896, False, 256) == (0, 1, 128)      # [0.857, 1.143): half each
+    assert blend_weight(959, 256, 960, False, 256) == (255, 255, 0)  # nothing past the last pixel
+    assert blend_weight(3, 224, 720, False, 224) == (0, 1, 201)      # rows: [0.933, 1.244): 0.2444 / 0.3111
+    # 320 pixels in 960 columns: exactly 3 each, sharp has nothing to blend, soft is 1/3 either way
+    assert all(blend_weight(m, 320, 960, False, 320)[2] == 0 for m in range(960))
+    assert blend_weight(0, 320, 960, True, 320) == (0, 0, 0)
+    assert blend_weight(2, 320, 960, True, 320) == (0, 1, 85)
+    assert blend_weight(3, 320, 960, True, 320) == (1, 0, 85)
+    assert blend_weight(4, 320, 960, True, 320) == (1, 1, 0) or blend_weight(4, 320, 960, True, 320)[2] == 0
+    assert blend_weight(1, 240, 720, True, 240) == (0, 0, 0) or blend_weight(1, 240, 720, True, 240)[2] == 0
+    assert blend_weight(2, 240, 720, True, 240) == (0, 1, 85)        # 240 lines in 720 rows: 3 rows each
+    assert blend_weight(3, 240, 720, True, 240) == (1, 0, 85)
+    # soft: output pixel m has its centre at (m + 1/2) * 4/15 source pixels
+    assert blend_weight(0, 256, 960, True, 256) == (0, 0, 0)         # the first pixel has no left neighbour
+    assert blend_weight(1, 256, 960, True, 256) == (0, 0, 0)         # centre 0.4, 0.1 before the centre of pixel 0: no pixel -1
+    assert blend_weight(2, 256, 960, True, 256) == (0, 1, 43)        # centre 0.667, 0.1667 past the centre of pixel 0
+    assert blend_weight(5, 256, 960, True, 256) == (1, 0, 9)         # centre 1.4667, 0.0333 before the centre of pixel 1
+    assert blend_weight(6, 256, 960, True, 256) == (1, 2, 60)        # centre 1.7333, 0.2333 past it
+    assert blend_weight(0, 1, 3, True, 224) == (0, 0, 0)             # integer rows: first line, first row has no line above
+    assert blend_weight(3, 1, 3, True, 224) == (1, 0, 85)            # a third of a line towards the line above
+    assert blend_weight(4, 1, 3, True, 224) == (1, 2, 0)             # the middle row is the line
+    assert blend_weight(5, 1, 3, True, 224) == (1, 2, 85)
+    assert blend_weight(671, 1, 3, True, 224) == (223, 223, 0)       # and no line below the last
+    assert all(blend_weight(r, 1, 3, False, 224)[2] == 0 for r in range(672))     # sharp has nothing to blend
+    assert lerp(100, 200, 64) == 125 and lerp(200, 100, 64) == 175 and lerp(10, 11, 128) == 11
+    assert lerp(10, 11, 127) == 10 and lerp(255, 0, 255) == 1 and lerp(0, 255, 255) == 254
+    # the geometry: 320 pixels in 896 columns are 2.8 per pixel, not smoothed
+    assert [smoothed(c, l, g) for c, l, g in ((256, 224, 0), (320, 224, 0), (256, 224, 1), (320, 224, 1),
+                                               (256, 240, 1), (320, 240, 1))] == [True, True, True, False, True, True]
+    # smooth_axis: the 16 bit reciprocal gives the exact rounded weight at every position
+    for step, size in ((256, 960), (256, 896), (320, 960), (224, 720), (240, 720)):
+        for soft in (False, True):
+            for pos in range(size):
+                if soft:
+                    exact = Fraction(abs(2 * pos + step - size), size) * 128
+                else:
+                    exact = Fraction(max(0, pos + step - size), step) * 256
+                want = min(255, int(exact + Fraction(1, 2)))
+                assert rtl_weight(pos, step, size, soft) == want, (step, size, soft, pos)
+    # and the position model (xcnt / ycnt) gives the same weights as the pixel model
+    for step, size, count in ((256, 960, 256), (256, 896, 256), (320, 960, 320), (224, 720, 224), (240, 720, 240)):
+        for soft in (False, True):
+            for n in range(size * count // step):
+                pos = (n * step) % size
+                cur, nbr, w = blend_weight(n, step, size, soft, 10 ** 6)
+                if nbr != cur:                  # (the first pixel has no neighbour before it)
+                    assert rtl_weight(pos, step, size, soft) == w, (step, size, soft, n)
+    return True
+
+
+def check_smooth(logpaths, srcpaths):
+    """lines: "F on out thick darkness overlay video_config cols lines" starting a frame, then
+    "cfg x y pic dark darkness 0 0 in out" for the pixels of the logged rows"""
+    selfcheck_smooth()
+    n = bad = 0
+    frames = 0
+    stats = {}
+    for logpath, srcpath in zip(logpaths, srcpaths):
+        pos_off = 1         # the picture's first column is shown while the hdmi counter cx = XSTART + 1
+        f_on = f_out = f_thick = f_dk = f_over = 0
+        cfg = mode = 0
+        geom = False
+        model = None
+        key = None
+
+        def fail(what, t, want, got):
+            nonlocal bad
+            bad += 1
+            if bad <= 12:
+                print("MISMATCH %s %dx%d cfg=%08x x=%s y=%s on=%d out=%d: got %s, want %s" % (what, cols, lines, cfg, t[1], t[2], f_on, f_out, got, want))
+
+        with open(logpath) as f:
+            for line in f:
+                t = line.split()
+                if t[0] == "F":
+                    f_on, f_out, f_thick, f_dk, f_over = [int(v) for v in t[1:6]]
+                    cfg = int(t[6], 16)
+                    cols, lines = int(t[7]), int(t[8])
+                    if model is None or (model.cols, model.lines) != (cols, lines):
+                        model = Smooth(load_src(srcpath, cols, lines), cols, lines)
+                    mode = (cfg >> 18) & 3
+                    mode = 0 if mode == 3 else mode
+                    geom = bool(f_on and not f_out and not f_over)
+                    frames += 1
+                    key = (frames, cols, lines, f_on, f_out, f_thick, f_dk, f_over, cfg)
+                    stats[key] = [0, 0, 0]      # pixels, picture pixels, picture pixels that differ from the nearest neighbour
+                    continue
+                x, y, pic, dark, darkness = [int(v) for v in t[1:6]]
+                rgb = unpack(int(t[8], 16))
+                got = unpack(int(t[9], 16))
+                n += 1
+                xsize, xstart, nrows, ytop = smooth_geometry(cols, lines, geom)
+                m, r = x - (xstart + pos_off), y - ytop
+                in_pic = (0 <= m < xsize) and (0 <= r < nrows) and not f_over
+                st = stats[key]
+                st[0] += 1
+                if f_over:
+                    pass                                # the overlay is whatever it is; nothing is smoothed
+                elif pic != in_pic:
+                    fail("picture flag", t, int(in_pic), pic)
+                elif in_pic:
+                    st[1] += 1
+                    want = model.pixel(mode, geom, m, r)
+                    if rgb != want:
+                        fail("smoothed pixel", t, "%02x%02x%02x" % want, "%02x%02x%02x" % rgb)
+                    if want != model.pixel(0, geom, m, r):
+                        st[2] += 1
+                else:
+                    if rgb != (0x30, 0x30, 0x30):
+                        fail("border", t, "303030", "%02x%02x%02x" % rgb)
+                # the scanline darkening: the last dark rows of each source line (integer scale) or of every 3 output rows
+                dthin = 2 if f_thick else 1
+                if f_over or not in_pic:
+                    want_dark = 0
+                elif f_on and not f_out:
+                    want_dark = int(r % 3 >= 3 - dthin)
+                elif f_on and f_out:
+                    want_dark = int(y % 3 >= 3 - dthin)
+                else:
+                    want_dark = 0
+                if not f_over and (dark != want_dark or (in_pic and darkness != f_dk)):
+                    fail("scanline flags", t, "dark=%d darkness=%d" % (want_dark, f_dk), "dark=%d darkness=%d" % (dark, darkness))
+                # the filters on the smoothed picture
+                want_out = fx(rgb, pic, dark, darkness, 0, 0, x, y, cfg & 0x3FFFF)
+                if got != want_out:
+                    fail("filters", t, "%02x%02x%02x" % want_out, "%02x%02x%02x" % got)
+    print("smooth check: %d pixels in %d frames, %d mismatches" % (n, frames, bad))
+    for key, st in stats.items():
+        fr, cols, lines, on, out, thick, dk, over, c = key
+        print("  frame %2d: %dx%d scanlines=%d out=%d thick=%d dark=%d overlay=%d video_config=%08x: %d logged, %d picture, %d differ from nearest neighbour"
+              % (fr, cols, lines, on, out, thick, dk, over, c, st[0], st[1], st[2]))
+        smode = (c >> 18) & 3
+        geom = bool(on and not out and not over)
+        # (a mode that has nothing to blend leaves the picture as it is: not smoothed at all, or
+        # sharp with a whole number of output columns and rows per source pixel)
+        if smode in (1, 2) and not over and st[2] == 0 and smoothed(cols, lines, geom) \
+                and not (smode == 1 and whole_scale(cols, lines, geom)):
+            print("    mode %d blended nothing" % smode)
+            bad += 1
+        if smode in (0, 3) and st[2] != 0:
+            print("    mode %d changed the picture" % smode)
+            bad += 1
+        if not over and st[1] == 0:
+            print("    no picture pixels logged")
+            bad += 1
+    sys.exit(1 if bad or n == 0 else 0)
+
+
+def whole_scale(cols, lines, geom):
+    """every source pixel is a whole number of output columns and of output rows"""
+    return smooth_geometry(cols, lines, geom)[0] % cols == 0 and (geom or 720 % lines == 0)
+
+
 def check(path):
     """lines: cfg_hex x y pic dark darkness col row in_hex out_hex"""
     n = bad = 0
@@ -262,9 +543,14 @@ def seen_cfgs(path):
 if __name__ == "__main__":
     if len(sys.argv) == 2 and sys.argv[1] == "selfcheck":
         print("model: selfcheck ok, colour error vs real arithmetic <= %.2f LSB" % selfcheck())
+        selfcheck_smooth()
+        print("model: smoothing selfcheck ok")
     elif len(sys.argv) == 2 and sys.argv[1] == "gen":
         gen()
     elif len(sys.argv) == 3 and sys.argv[1] == "check":
         check(sys.argv[2])
+    elif len(sys.argv) >= 4 and sys.argv[1] == "check_smooth" and (len(sys.argv) - 2) % 2 == 0:
+        files = sys.argv[2:]
+        check_smooth(files[0::2], files[1::2])
     else:
         sys.exit(__doc__)
