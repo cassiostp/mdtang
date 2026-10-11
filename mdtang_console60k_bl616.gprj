@@ -11,6 +11,7 @@
         <File path="src/framebuffer_sync.sv" type="file.verilog" enable="1"/>
         <File path="src/scanlines.v" type="file.verilog" enable="1"/>
         <File path="src/video_fx.v" type="file.verilog" enable="1"/>
+        <File path="src/smooth.v" type="file.verilog" enable="1"/>
         <File path="src/fx68k/fx68k.sv" type="file.verilog" enable="1"/>
         <File path="src/fx68k/fx68kAlu.sv" type="file.verilog" enable="1"/>
         <File path="src/fx68k/uaddrPla.sv" type="file.verilog" enable="1"/>
