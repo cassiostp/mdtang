@@ -46,7 +46,12 @@ if {$dev eq "mega60k"} {
 } else {
     error "Unknown device $dev"
 }
-add_file -type sdc "src/mdtang.sdc"
+# Gowin reads one SDC per project; the 60K needs two extra cuts
+if {$dev eq "console60k"} {
+    add_file -type sdc "src/boards/console60k.sdc"
+} else {
+    add_file -type sdc "src/mdtang.sdc"
+}
 set_option -output_base_name mdtang_${dev}
 
 add_file -type verilog "src/iosys/iosys_bl616.v"
