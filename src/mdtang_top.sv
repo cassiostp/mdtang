@@ -13,6 +13,13 @@ module mdtang_top (
     input [2:0] loading,            // 0: gba on, 1: loading rom, 2: loading cartram, 3: set up flash backup
     input [7:0] loader_do,
     input loader_do_valid,
+    input [31:0] verilator_core_config,     // stands in for the iosys core_config (quirk bits etc.)
+    // stand-ins for the iosys save channel, so a sim can restore/dump the
+    // save image exactly as the firmware does (byte toggles on req)
+    input [15:0] verilator_sv_addr,
+    input [7:0] verilator_sv_din,
+    input verilator_sv_we,
+    input verilator_sv_req,
 `endif
 
     // MicroSD
@@ -143,17 +150,46 @@ wire mem_req, mem_ack, mem_we;
 // (its save stream is save_addr={sd_lba[6:0],sd_buff_addr} over cart_addr[16:1],
 // i.e. the same linear image). The save engine rides port 3 of the SDRAM
 // controller, the lowest priority: a save access can never delay the game.
-wire        sv_core_we;             // from system.sv: the game wrote cart SRAM
+wire        sv_core_we;             // from system.sv: the game wrote cart SRAM / EEPROM
 wire [15:0] sv_addr;                // byte address within the 64 KB save region
 wire [7:0]  sv_din, sv_q;
 wire        sv_we, sv_req, sv_ack;
 wire [15:0] sv_dword;
+wire        sv_ack_sd;              // SDRAM port-3 ack (SRAM games)
 `ifdef VERILATOR
-assign sv_req = 1'b0;               // no iosys in the Verilator sim: keep the save channel quiet
-assign sv_ack = 1'b0;
+// no iosys in the Verilator sim: the harness drives the channel (all zero
+// keeps it quiet); SDRAM save reads are not modelled on this path
+assign sv_req = verilator_sv_req;
+assign sv_addr = verilator_sv_addr;
+assign sv_din = verilator_sv_din;
+assign sv_we = verilator_sv_we;
+assign sv_ack_sd = 1'b0;
 assign sv_dword = '0;
 `endif
-assign sv_q = sv_addr[0] ? sv_dword[7:0] : sv_dword[15:8];   // big-endian word: even byte = upper lane
+
+// Per-game cart quirks, sent by the firmware in core_config's low bits (it
+// matches the ROM header serial against MiSTer's table; see core/md.cpp):
+// [3:0] I2C EEPROM type/wiring (0 = none), [4] SRAM, [5] SRAM00, [6] NORAM,
+// [7] FM-busy, [8] Sega Channel. EEPROM games keep their save in the core's
+// EEPROM BRAM instead of the SDRAM SRAM window, so the save channel is
+// steered there: BRAM is byte-wide and answers in a cycle, but the iosys
+// engine still speaks req/ack toggles, so bridge them here (one byte per
+// toggle, address/data held by the engine until the ack lands).
+wire        eeprom_mode = (core_config[3:0] != 4'b0);
+wire [14:0] bram_a = {2'b0, sv_addr[12:0]};         // EEPROMs are at most 8 KB
+wire [15:0] bram_di = {8'b0, sv_din};
+wire [15:0] bram_do;
+reg         bram_we = 0, sv_ack_br = 0;
+always @(posedge clk_sys) begin
+    bram_we <= 0;
+    if (eeprom_mode && sv_req != sv_ack_br) begin
+        bram_we <= sv_we;
+        sv_ack_br <= sv_req;
+    end
+end
+assign sv_ack = eeprom_mode ? sv_ack_br : sv_ack_sd;
+assign sv_q = eeprom_mode ? bram_do[7:0]
+                          : (sv_addr[0] ? sv_dword[7:0] : sv_dword[15:8]);   // big-endian word: even byte = upper lane
 
 wire overlay;                   // the menu is shown: the console gets no buttons
 // ...nor while core_config[22] asks (the firmware's scanline preview runs the
@@ -166,10 +202,11 @@ wire [11:0] joy2 = pads_muted ? 12'b0 : btn_snes2md(joy2_btns | hid2 | joy_usb2)
 system megadrive (
     .MCLK(clk_sys), .CLK_Z80(clk_z80), .RESET_N(md_on),
     .LPF_MODE('1), .ENABLE_FM('1), .ENABLE_PSG('1), .DAC_LDATA(audio_left), .DAC_RDATA(audio_right),
-    .LOADING(loading != 0), .PAL('0), .EXPORT('1), .FAST_FIFO('0), .SRAM_QUIRK('0), .SRAM00_QUIRK('0),
-    .NORAM_QUIRK('0), .PIER_QUIRK('0), .SVP_QUIRK('0), .FMBUSY_QUIRK('0), .SCHAN_QUIRK('0), .TURBO('0), 
+    .LOADING(loading != 0), .PAL('0), .EXPORT('1), .FAST_FIFO('0), .SRAM_QUIRK(core_config[4]), .SRAM00_QUIRK(core_config[5]),
+    .EEPROM_QUIRK(core_config[3:0]),
+    .NORAM_QUIRK(core_config[6]), .PIER_QUIRK('0), .SVP_QUIRK('0), .FMBUSY_QUIRK(core_config[7]), .SCHAN_QUIRK(core_config[8]), .TURBO('0), 
     .GG_RESET('0), .GG_EN('0), .GG_CODE('0), .GG_AVAILABLE(),
-    .BRAM_A(), .BRAM_DI(), .BRAM_DO(), .BRAM_WE(), .BRAM_CHANGE(sv_core_we),
+    .BRAM_A(bram_a), .BRAM_DI(bram_di), .BRAM_DO(bram_do), .BRAM_WE(bram_we), .BRAM_CHANGE(sv_core_we),
     .RED(red), .GREEN(green), .BLUE(blue), .VS(), .HS(hsync), .HBL(hblank), .VBL(vblank), .CE_PIX(ce_pix), 
     .BORDER('0), .CRAM_DOTS('0), .INTERLACE(), .FIELD(), .RESOLUTION(resolution),
     .J3BUT('0), .JOY_1(joy1), .JOY_2(joy2), .JOY_3(), .JOY_4(), .JOY_5(), .MULTITAP('0),
@@ -177,14 +214,14 @@ system megadrive (
     .GUN_B('0), .GUN_C('0), .GUN_START('0),
     .SERJOYSTICK_IN('0), .SERJOYSTICK_OUT(), .SER_OPT('0),
     .MEM_ADDR(mem_addr), .MEM_DATA(mem_data), .MEM_WDATA(mem_wdata), .MEM_WE(mem_we), .MEM_BE(mem_be),
-    .MEM_REQ(mem_req), .MEM_ACK(mem_ack), .ROMSZ(loader_addr[21:1]),
+    .MEM_REQ(mem_req), .MEM_ACK(mem_ack), .ROMSZ({1'b0, loader_addr[23:1]}),
     .EN_HIFI_PCM('0), .LADDER('0), .OBJ_LIMIT_HIGH('0), .TRANSP_DETECT(),
     .PAUSE_EN(pause_core | pause_menu), .PAUSE_ALL(pause_menu), .BGA_EN('1), .BGB_EN('1), .SPR_EN('1), .DBG_M68K_A(), .DBG_VBUS_A()
 );
 
 
 reg [2:0] loading_r;
-reg [21:0] loader_addr, loader_addr_next;       // 4MB byte address, rom size after load complete
+reg [23:0] loader_addr, loader_addr_next;       // byte address/count in the 8MB SDRAM ROM window (24 bits: an exactly-8MB image counts to 0x800000 without wrapping), rom size after load complete
 reg loader_req;
 wire sdram_busy;
 always @(posedge clk_sys) begin
@@ -210,7 +247,7 @@ sdram_sim u_sdram (
     .clk(clk_sys), .resetn(1'b1), .busy(sdram_busy),
     .addr0(mem_addr), .req0(mem_req), .ack0(mem_ack), .wr0(mem_we), .be0(mem_be),
 	.din0(mem_wdata), .dout0(mem_data),
-    .addr1(loader_addr[21:1]), .req1(loader_req), .ack1(), .wr1('1), .be1(loader_addr[0] ? 2'b01 : 2'b10),    // big-endian
+    .addr1(loader_addr[23:1]), .req1(loader_req), .ack1(), .wr1('1), .be1(loader_addr[0] ? 2'b01 : 2'b10),    // big-endian
 	.din1({2{loader_do}}), .dout1(), 
     .addr2(), .req2(), .ack2(), .wr2(), .be2(),
 	.din2('0), .dout2(), 
@@ -218,9 +255,14 @@ sdram_sim u_sdram (
 	.din3('0), .dout3()
 );
 
-// no OSD menu under verilator, never pause for menu
+// no OSD menu/HID/USB under verilator, never pause for menu
+wire [11:0] hid1, hid2, joy_usb1, joy_usb2;
+assign hid1 = '0;
+assign hid2 = '0;
+assign joy_usb1 = '0;
+assign joy_usb2 = '0;
 assign overlay = 1'b0;
-assign core_config = '0;
+assign core_config = verilator_core_config;
 assign video_config = '0;
 
 `else
@@ -252,13 +294,14 @@ sdram #(.FREQ(FREQ)) u_sdram (
     .addr0(mem_addr), .req0(mem_req), .ack0(mem_ack), .wr0(mem_we), .be0(mem_be),
 	.din0(mem_wdata), .dout0(mem_data),
 
-    .addr1(loader_addr[21:1]), .req1(loader_req), .ack1(), .wr1('1), .be1(loader_addr[0] ? 2'b01 : 2'b10),    // big-endian
+    .addr1(loader_addr[23:1]), .req1(loader_req), .ack1(), .wr1('1), .be1(loader_addr[0] ? 2'b01 : 2'b10),    // big-endian
 	.din1({2{loader_do}}), .dout1(), 
 
     .addr2({2'b10, rv_mem_addr}), .req2(rv_mem_req), .ack2(rv_mem_ack), .wr2(rv_mem_we), .be2(rv_mem_ds),
 	.din2(rv_mem_din), .dout2(rv_mem_dout),
 
-    .addr3({8'h41, 1'b0, sv_addr[15:1]}), .req3(sv_req), .ack3(sv_ack), .wr3(sv_we), .be3({~sv_addr[0], sv_addr[0]}),
+    // EEPROM games: req held at the ack level (idle); their save channel is the BRAM bridge above
+    .addr3({8'h41, 1'b0, sv_addr[15:1]}), .req3(eeprom_mode ? sv_ack_sd : sv_req), .ack3(sv_ack_sd), .wr3(sv_we), .be3({~sv_addr[0], sv_addr[0]}),
 	.din3({2{sv_din}}), .dout3(sv_dword),
 
     .SDRAM_DQ(IO_sdram_dq), .SDRAM_A(O_sdram_addr), .SDRAM_BA(O_sdram_ba),      
