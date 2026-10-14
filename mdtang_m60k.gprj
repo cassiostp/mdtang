@@ -93,6 +93,7 @@
         <File path="src/peripherals/lightgun.sv" type="file.verilog" enable="1"/>
         <File path="src/peripherals/multitap.sv" type="file.verilog" enable="1"/>
         <File path="src/peripherals/teamplayer.sv" type="file.verilog" enable="1"/>
+        <File path="src/peripherals/EEPROM_24CXX.sv" type="file.verilog" enable="1"/>
         <File path="src/system.sv" type="file.verilog" enable="1"/>
         <File path="src/t80/t80.v" type="file.verilog" enable="1"/>
         <File path="src/t80/t80_alu.v" type="file.verilog" enable="1"/>
