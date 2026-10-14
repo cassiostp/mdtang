@@ -7,6 +7,13 @@ create_generated_clock -name clk_z80 -source [get_nets {clk_sys}] -divide_by 2 [
 set_multicycle_path 4 -end -setup -from [get_clocks {clk_z80}] -to [get_clocks {clk_sys}]
 set_multicycle_path 3 -end -hold -from [get_clocks {clk_z80}] -to [get_clocks {clk_sys}]
 
+// M68K to Z80 control synchronizers: bus-request and Z80 reset change only
+// while the Z80 is stopped or stopping, so cut these asynchronous inputs
+// instead of forcing P&R to meet hold on them (the 60K fit fails two such
+// paths by ~50 ps once the design grows past ~3/4 BSRAM).
+set_false_path -from [get_pins {megadrive/z80_busrq_n*/Q}] -to [get_pins {megadrive/Z80_BUSRQ_N*/D}]
+set_false_path -from [get_pins {megadrive/z80_reset_n*/Q}] -to [get_pins {megadrive/Z80_RESET_N*/D}]
+
 // From fx68k.txt
 // micro-code fetch is needed in 2 cycles
 //set_multicycle_path 4 -start -setup -from [get_pins {megadrive/M68K/Ir*/*}] -to [get_pins {megadrive/M68K/microAddr_*/*}]
