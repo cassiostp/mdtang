@@ -189,11 +189,8 @@ wire [11:0] XSIZE  = (sl_geom && sl_pic_top != 10'd0) ? 12'd896 : 12'd960;
 wire [11:0] XSTART = (12'd1280 - XSIZE) >> 1;
 wire [11:0] XSTOP  = (12'd1280 + XSIZE) >> 1;
 
-// smooth.v needs source columns of at least 3 output columns: the 320 pixel wide picture in
-// 896 columns (2.8 per pixel) is shown as it is, without smoothing, and only its own line is read
-reg sm_ok;
-always @(posedge clk_pixel) sm_ok <= XSIZE >= width * 3;
-wire [7:0] ysel = (sm_rd_b & sm_ok) ? yb_s : yy_s;
+// the line buffer is read twice per source column, the line to show and its neighbour line
+wire [7:0] ysel = sm_rd_b ? yb_s : yy_s;
 assign mem_portB_addr = ysel[4:0] * WIDTH + xx;
 
 // address calculation
@@ -209,7 +206,7 @@ assign mem_portB_addr = ysel[4:0] * WIDTH + xx;
 // at the start of an output row, far from the picture, so which line is read on which row does
 // not move.
 localparam FX_LAT = 11;     // clocks from rgb_pre to rgb, see video_fx.v
-localparam SM_LAT = 10;     // the line buffer read is followed by a register, smooth.v (LAT 9) and the rgb_pre register
+localparam SM_LAT = 9;      // the line buffer read is followed by a register, smooth.v (LAT 8) and the rgb_pre register
 reg cnew = 1'b0;            // the line buffer address is the first of a source column
 always @(posedge clk_pixel) begin
     reg active_t;
@@ -312,17 +309,13 @@ always @(posedge clk_pixel)
 // the line buffer read as RGB8, and the first-of-column flag with it
 reg [23:0] pal_q;
 reg cn1, cn2;
-reg [24*9-1:0] pal_sh;              // pal_q delayed by the LAT (9) of smooth.v
 always @(posedge clk_pixel) begin
     pal_q <= {mem_portB_rdata[COLOR_BITS*2 +: COLOR_BITS], {(8-COLOR_BITS){1'b0}},
               mem_portB_rdata[COLOR_BITS   +: COLOR_BITS], {(8-COLOR_BITS){1'b0}},
               mem_portB_rdata[0            +: COLOR_BITS], {(8-COLOR_BITS){1'b0}}};    // RGB4 to RGB8
     cn1 <= cnew;
     cn2 <= cn1;
-    pal_sh <= {pal_sh[24*8-1:0], pal_q};
 end
-
-wire [23:0] pic_rgb = sm_ok ? sm_rgb : pal_sh[24*9-1 -: 24];
 
 smooth sm (
     .clk(clk_pixel), .cy(cy), .cfg(video_config[19:18]), .mode(sm_mode),
@@ -336,7 +329,7 @@ always @(posedge clk_pixel) begin
         if (overlay)
             rgb_pre <= {overlay_color[4:0],3'b0,overlay_color[9:5],3'b0,overlay_color[14:10],3'b0};       // BGR5 to RGB8
         else
-            rgb_pre <= pic_rgb;
+            rgb_pre <= sm_rgb;
     end else
         rgb_pre <= 24'h303030;
     pic_pre <= active_d & sl_show & ~overlay;

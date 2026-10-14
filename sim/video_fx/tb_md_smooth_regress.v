@@ -5,8 +5,7 @@
 // and with the overlay up the same holds in every smoothing mode, the overlay is never smoothed.
 // Both get the same video_config (the baseline ignores bits 19:18). hdmi_first_line, the row where
 // the core is released, is compared too. One simulation is one frame size, +W=256|320 +H=224|240
-// (run.sh runs the four): the 320 pixel wide frames in the integer scale (896 columns) are not
-// smoothed at all, so every smoothing mode must be identical there.
+// (run.sh runs the four).
 // The line buffer holds a pseudo-random picture (every ring row and column differs) and the overlay
 // is a pattern read through the overlay_x / overlay_y outputs with a two clock latency, so a line
 // buffer read that lands on another row or column, or an overlay that lands on other pixels, is
@@ -152,10 +151,6 @@ module tb_md_smooth_regress;
         variant(1, 0, 0, 2, 1, SOFT | FXW);
         variant(1, 1, 1, 2, 1, SHARP | FW_OFF);
         variant(0, 0, 0, 2, 1, RSVD);
-        if (W == 320 && H == 224) begin         // 2.8 columns per pixel in the integer scale: not smoothed
-            variant(1, 0, 0, 2, 0, SHARP);
-            variant(1, 0, 1, 1, 0, SOFT | FXW);
-        end
         variant(1, 0, 1, 2, 0, FW_OFF);         // and back
         $display("tb_md_smooth_regress %0dx%0d: %0d pixels identical to the baseline (%0d picture)", W, H, total_cmp, total_pic);
         $display("tb_md_smooth_regress: PASS");

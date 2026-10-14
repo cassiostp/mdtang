@@ -290,9 +290,9 @@ def smooth_geometry(cols, lines, geom):
 
 
 def smoothed(cols, lines, geom):
-    """smooth.v needs source columns of at least 3 output columns: the 320 pixel wide picture
-    in the 896 columns of the integer scale (2.8 per pixel) is shown unsmoothed"""
-    return smooth_geometry(cols, lines, geom)[0] >= 3 * cols
+    """every geometry is smoothed, including the 320 pixel wide picture in the 896 columns
+    of the integer scale (2.8 per pixel)"""
+    return True
 
 
 class Smooth:
@@ -375,9 +375,9 @@ def selfcheck_smooth():
     assert all(blend_weight(r, 1, 3, False, 224)[2] == 0 for r in range(672))     # sharp has nothing to blend
     assert lerp(100, 200, 64) == 125 and lerp(200, 100, 64) == 175 and lerp(10, 11, 128) == 11
     assert lerp(10, 11, 127) == 10 and lerp(255, 0, 255) == 1 and lerp(0, 255, 255) == 254
-    # the geometry: 320 pixels in 896 columns are 2.8 per pixel, not smoothed
+    # every geometry is smoothed, including 320 pixels in 896 columns (2.8 per pixel)
     assert [smoothed(c, l, g) for c, l, g in ((256, 224, 0), (320, 224, 0), (256, 224, 1), (320, 224, 1),
-                                               (256, 240, 1), (320, 240, 1))] == [True, True, True, False, True, True]
+                                               (256, 240, 1), (320, 240, 1))] == [True, True, True, True, True, True]
     # smooth_axis: the 16 bit reciprocal gives the exact rounded weight at every position
     for step, size in ((256, 960), (256, 896), (320, 960), (224, 720), (240, 720)):
         for soft in (False, True):

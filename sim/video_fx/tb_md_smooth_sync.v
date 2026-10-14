@@ -141,7 +141,7 @@ module tb_md_smooth_sync;
     realtime slack, min_a, min_b_dn, min_b_up;
     integer pic_top;
     reg     used;
-    wire    b_read = dut.sm_rd_b && dut.sm_ok;          // (the 320 pixel wide picture in 896 columns reads its own line only)
+    wire    b_read = dut.sm_rd_b;
     reg     [7:0] want_line;
     integer lead, max_lead = 0;                 // how many lines the VDP is ahead of the line read
     always @(posedge clk_pixel) begin
