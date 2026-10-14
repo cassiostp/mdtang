@@ -3,9 +3,9 @@ D=../src
 SRCS=$D/mdtang_top.sv \
 	 $D/fx68k/verilator/fx68k.sv $D/fx68k/verilator/fx68kAlu.sv $D/fx68k/verilator/uaddrPla.sv \
 	 $D/vdp/vdp.v $D/vdp/vdp_common.v $D/common/dpram_block.v $D/common/dpram.v \
-	 $D/common/ssram.v $D/common/dpram32_block.v \
+	 $D/common/dpram32_block.v \
 	 $D/system.sv $D/memory/sdram_sim.v $D/peripherals/multitap.sv $D/peripherals/gen_io.sv \
-	 $D/peripherals/fourway.v $D/peripherals/lightgun.sv $D/peripherals/teamplayer.sv \
+	 $D/peripherals/fourway.v $D/peripherals/lightgun.sv $D/peripherals/teamplayer.sv $D/peripherals/EEPROM_24CXX.sv \
 	 $D/jt89/jt89_mixer.v $D/jt89/jt89_noise.v $D/jt89/jt89_tone.v $D/jt89/jt89_vol.v $D/jt89/jt89.v \
 	 $D/jt12/jt12.v $D/jt12/jt12_top.v $D/jt12/jt12_acc.v $D/jt12/jt12_single_acc.v $D/jt12/jt12_eg.v \
 	 $D/jt12/jt12_eg_cnt.v $D/jt12/jt12_eg_comb.v $D/jt12/jt12_eg_step.v $D/jt12/jt12_eg_pure.v \
