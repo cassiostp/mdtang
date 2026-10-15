@@ -133,6 +133,9 @@ wire       pause_core;
 wire [31:0] core_config;        // from iosys
 wire [31:0] video_config;       // from iosys
 wire       pause_menu = core_config[17];   // menu pause from iosys
+// video_std_timing selects the standard 60 Hz timing (for displays that
+// refuse the native rate; a menu option for it may come later).
+wire       video_std_timing = 1'b0;
 wire [3:0] red   /* xsynthesis syn_keep=1 */, 
            green /* xsynthesis syn_keep=1 */, 
            blue  /* xsynthesis syn_keep=1 */;
@@ -407,6 +410,7 @@ framebuffer #(
     .audio_left(pause_menu ? 16'd0 : audio_left), .audio_right(pause_menu ? 16'd0 : audio_right),    // silent while paused
     .overlay(overlay), .overlay_x(overlay_x), .overlay_y(overlay_y), .overlay_color(overlay_color),
     .pause_core(pause_core),
+    .std_timing(video_std_timing),
     .scanlines(core_config[16]), .sl_darkness(core_config[19:18]), .sl_thick(core_config[20]), .sl_out(core_config[21]),
     .video_config(video_config),
     

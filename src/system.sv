@@ -141,8 +141,8 @@ module system
 	output		  TRANSP_DETECT,
 	
 	//debug
-	input         PAUSE_EN,       // 1: pause 68k and vdp (frame sync / menu)
-	input         PAUSE_ALL,      // 1: also pause z80, fm and psg (menu pause)
+	input         PAUSE_EN,       // 1: pause 68k, vdp, z80, fm and psg (frame sync halt holds the audio sample; menu pause mutes at the top)
+	input         PAUSE_ALL,      // 1: menu pause (PAUSE_EN already includes it; kept for compatibility)
 	input         BGA_EN,
 	input         BGB_EN,
 	input         SPR_EN,
@@ -245,20 +245,20 @@ always @(posedge MCLK) begin
 			ZCLKCNT <= 0;
 		if (clk_z80_cycle) 				// make sure Z80_CLKENn is 2 MCLK wide and aligned with CLK_Z80
 			if (ZCLKCNT == 13 | ZCLKCNT == 14) 
-				Z80_CLKENn <= ~PAUSE_ALL;
+				Z80_CLKENn <= ~(PAUSE_ALL | PAUSE_EN);
 			else
 				Z80_CLKENn <= 0;
 		
 		Z80_CLKENp <= 0;
 		if (ZCLKCNT == 7) begin
-			Z80_CLKENp <= ~PAUSE_ALL;
+			Z80_CLKENp <= ~(PAUSE_ALL | PAUSE_EN);
 		end
 
 		PSG_CLKEN <= 0;
 		PCLKCNT <= PCLKCNT + 1'b1;
 		if (PCLKCNT == 14) begin
 			PCLKCNT <= 0;
-			PSG_CLKEN <= ~PAUSE_ALL; 	// frame sync keeps PSG running, menu pause stops it
+			PSG_CLKEN <= ~(PAUSE_ALL | PAUSE_EN); 	// frame sync holds the audio sample, menu pause stops it (muted at the top)
 		end
 
 		M68K_CLKENp <= 0;
@@ -280,7 +280,7 @@ always @(posedge MCLK) begin
 		FCLKCNT <= FCLKCNT + 1'b1;
 		if (FCLKCNT == 6) begin
 			FCLKCNT <= 0;
-			FM_CLKEN <= ~PAUSE_ALL;		// frame sync keeps FM running, menu pause stops it
+			FM_CLKEN <= ~(PAUSE_ALL | PAUSE_EN);		// frame sync holds the audio sample, menu pause stops it (muted at the top)
 		end
 	end
 end

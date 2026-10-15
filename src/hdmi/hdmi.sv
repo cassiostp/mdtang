@@ -60,9 +60,17 @@ module hdmi
     // generating a signal from scratch instead of processing an
     // external signal.
     parameter int START_X = 0,
-    parameter int START_Y = 0
+    parameter int START_Y = 0,
+
+    // Native refresh: when std_timing is 1 the 720p mode uses the standard
+    // 1650-clock line; when 0 it uses NATIVE_FRAME_WIDTH clocks, the
+    // console's own refresh rate at the same 74.25 MHz pixel clock.
+    parameter int NATIVE_FRAME_WIDTH = 1650
 )
 (
+    // std_timing selects the standard 60.00 Hz 720p timing (1) or the native
+    // console rate (0); a menu option for it may come later.
+    input logic std_timing,
     input logic clk_pixel_x5,
     input logic clk_pixel,
     input logic clk_audio,
@@ -127,7 +135,10 @@ generate
             end
         4:
         begin
-            assign frame_width = 1650;
+            // See NATIVE_FRAME_WIDTH above: only the line length changes;
+            // height, sync and polarity stay the standard 720p values.
+            // (=== so an unconnected std_timing in older benches means native.)
+            assign frame_width = (std_timing === 1'b1) ? 1650 : NATIVE_FRAME_WIDTH;
             assign frame_height = 750;
             assign screen_width = 1280;
             assign screen_height = 720;

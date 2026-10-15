@@ -44,6 +44,8 @@ module framebuffer #(
     input sl_out,                   // core_config[21]: dark output rows instead of an integer scale
     input [31:0] video_config,      // colour controls, CRT mask and smoothing, see video_fx.v, smooth.v (the LCD grid is unused)
 
+    input std_timing,               // 1: standard 60.00 Hz 720p, 0: native console rate (see hdmi.sv)
+
     input [15:0] audio_left,        // audio sample
     input [15:0] audio_right,
 
@@ -356,16 +358,20 @@ localparam VIDEOID = 4;
 localparam VIDEO_REFRESH = 60.0;
 localparam COLLEN = 80;
 localparam AUDIO_BIT_WIDTH = 16;
-hdmi #( .VIDEO_ID_CODE(VIDEOID), 
-        .DVI_OUTPUT(0), 
+// Genesis native rate: 1652 clocks/line = 59.9274 Hz at 74.25 MHz (see hdmi.sv).
+localparam NATIVE_FRAME_WIDTH = 1652;
+hdmi #( .VIDEO_ID_CODE(VIDEOID),
+        .DVI_OUTPUT(0),
         .VIDEO_REFRESH_RATE(VIDEO_REFRESH),
         .IT_CONTENT(1),
-        .AUDIO_RATE(AUDIO_RATE), 
+        .AUDIO_RATE(AUDIO_RATE),
         .AUDIO_BIT_WIDTH(AUDIO_BIT_WIDTH),
         .START_X(0),
-        .START_Y(0) )
+        .START_Y(0),
+        .NATIVE_FRAME_WIDTH(NATIVE_FRAME_WIDTH) )
 
-hdmi( .clk_pixel_x5(clk_5x_pixel), 
+hdmi( .std_timing(std_timing),
+        .clk_pixel_x5(clk_5x_pixel), 
         .clk_pixel(clk_pixel), 
         .clk_audio(clk_audio),
         .rgb(rgb), 
