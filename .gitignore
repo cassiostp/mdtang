@@ -1,3 +1,11 @@
 
 # usb_hid_host microcode listing
 src/usb_hid_host_firmware/ukp.lst
+
+# sim artefacts
+sim/*/*.out
+sim/*/*.log
+sim/*/out_*
+sim/video_fx/build/
+sim/video_fx/md_*.log
+sim/video_fx/vec_*.hex
