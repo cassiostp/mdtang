@@ -19,6 +19,13 @@ git show $BASE:src/scanlines.v | sed \
     -e 's/^module sl_rows (/module sl_rows_base (/' \
     -e 's/^module sl_dim (/module sl_dim_base (/' > build/scanlines_base.v
 git show $FXBASE:src/framebuffer_sync.sv | sed -e 's/^module framebuffer #(/module framebuffer_fx #(/' > build/framebuffer_sync_fx.sv
+# Native rate: the differential benches (tb_md_regress, tb_md_smooth_regress)
+# compare the new scaler against these baselines clock for clock, so both
+# sides must run the shipped 1652-clock line. The old sources predate the
+# NATIVE_FRAME_WIDTH parameter (their std_timing floats, which the stub reads
+# as native); give their hdmi instance the native width explicitly.
+sed -i -e 's/\.START_Y(0) )/.START_Y(0), .NATIVE_FRAME_WIDTH(1652) )/' \
+    build/framebuffer_sync_base.sv build/framebuffer_sync_fx.sv
 grep -q '^module framebuffer_fx #(' build/framebuffer_sync_fx.sv
 grep -q '^module framebuffer_base #(' build/framebuffer_sync_base.sv
 grep -q '^sl_rows_base sl (' build/framebuffer_sync_base.sv
