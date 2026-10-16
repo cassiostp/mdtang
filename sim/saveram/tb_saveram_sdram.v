@@ -293,6 +293,28 @@ initial begin
     for (k = 0; k < 512; k = k + 64)
         core_read_check({6'd0, 7'd15, k[8:0]}, pat(8'hC3, k));
 
+    // 9. an eaten data-ready inside the engine must not wedge the link: the
+    //    block in flight is abandoned, but a core-ID poll is answered and the
+    //    next dump is byte-exact again. Pre-fix this parked TX in SEND_SAVE_BLK.
+    restore(16'd3, 8'h20);
+    expect_dump(16'd3, 8'h20);
+    fork
+        begin
+            request_dump(16'd3);
+        end
+        begin
+            wait (dut.send_state == 6 && dut.send_state_next == 10);  // block header
+            repeat (40000) @(negedge clk) dut.sv_data_rdy = 1'b0;     // eat every ready
+        end
+    join
+    #1_000_000;                                   // past the abandon + resync
+    rcnt = ncap;                                  // drop the truncated frame's bytes
+    send_hdr(16'd1, 8'h01);                       // core ID still answered
+    expect_core_id;
+    request_dump(16'd3);                          // and dumps work again
+    dump_header(16'd3);
+    for (k = 0; k < 512; k = k + 1) expect_byte(pat(8'h20, k));
+
     if (errs == 0) $display("tb_saveram_sdram: PASS");
     else $fatal(1, "tb_saveram_sdram: FAIL, %0d errors", errs);
     $finish;
