@@ -15,6 +15,18 @@
 //  - the audio sample holds while the core is paused (the frame-sync halt
 //    must hold, never inject silence) and advances otherwise, with a small
 //    max repeat at the HDMI audio clock.
+// Interlace (+ILACE=1 mode 1, +DRES=1 double-res mode 2): the core's field
+// is always 3420x262 clocks (V_TOTAL_HEIGHT has no interlace term) and the
+// top drops FIELD/INTERLACE, so the scaler sees each field as a progressive
+// frame of H lines; in double-res the two fields carry alternate rows of
+// the 2*H-line picture. The model then toggles a field parity per field
+// (encoded in the pixel data for +DRES) and the read check also requires
+// the current field's parity, with exactly one halt per field while locked.
+// +WSWITCH=1 / +HSWITCH=1 toggle the 256/320 width or the 224/240 height
+// at a halt (as a vblank register write lands) and back, forgiving the one
+// transition HDMI frame's reads; waits and period stay checked throughout.
+// Interlace/switch runs use a short scenario (lock + settled fields); the
+// pause/reset re-lock is covered by the progressive runs.
 `timescale 1ns/1ps
 
 module tb_frame_lock;
@@ -24,13 +36,22 @@ module tb_frame_lock;
     always #9.286 clk = ~clk;                   // 53.846 MHz (50 x 28 / 26)
 
     integer w_arg, h_arg;
+    integer ilace = 0, dres = 0, wswitch = 0, hswitch = 0;
     reg [10:0] W;
     reg  [9:0] H;
+    reg  short_mode = 0;
     initial begin
         if (!$value$plusargs("W=%d", w_arg)) w_arg = 320;
         if (!$value$plusargs("H=%d", h_arg)) h_arg = 224;
+        if (!$value$plusargs("ILACE=%d", ilace)) ilace = 0;
+        if (!$value$plusargs("DRES=%d", dres)) dres = 0;
+        if (!$value$plusargs("WSWITCH=%d", wswitch)) wswitch = 0;
+        if (!$value$plusargs("HSWITCH=%d", hswitch)) hswitch = 0;
         W = w_arg; H = h_arg;
+        short_mode = (ilace != 0) || (dres != 0) || (wswitch != 0) || (hswitch != 0);
     end
+    reg field_par = 0;                          // interlace field parity (toggles per field)
+    reg forgive = 0;                            // mode switch: skip read checks this HDMI frame
 
     reg menu_pause = 0;                         // menu pause: the whole machine holds (PAUSE_EN)
     reg core_reset = 0;                         // core reset: the VDP counters restart
@@ -54,6 +75,7 @@ module tb_frame_lock;
         pause_prev <= pause_core;
         if (core_reset) begin
             lc = 0; ln = 0;
+            field_par <= 0;
             hblank <= 1; vblank <= 1; hsync <= 0; ce_pix <= 0;
         end else if (!pause_core && !menu_pause) begin
             lc = lc + 1;
@@ -63,7 +85,10 @@ module tb_frame_lock;
                 if (ln == LINES_FRAME) ln = 0;
             end
             vblank <= (ln > H);
-            if (ln == 0 && lc == 0) frame <= frame + 1;
+            if (ln == 0 && lc == 0) begin
+                frame <= frame + 1;
+                field_par <= ~field_par;
+            end
             hblank <= (ln == 0) ? (lc >= 15 * pix) : (lc >= 256 * 10);
             hsync  <= (lc >= 2700 && lc < 2900);
             ce_pix <= (lc % pix == 0) && (lc < 2560);
@@ -112,7 +137,10 @@ module tb_frame_lock;
     end
 
     reg [3:0] pr, pg, pb;
-    always @(posedge clk) begin pr <= x[3:0] + y[3:0]; pg <= y[4:1]; pb <= x[7:4]; end
+    always @(posedge clk) begin
+        pr <= x[3:0] + y[3:0]; pg <= y[4:1];
+        pb <= dres ? {field_par, x[7:5]} : x[7:4];   // double-res: the field is in the pixel
+    end
 
     framebuffer #(.WIDTH(320), .HEIGHT(240), .COLOR_BITS(4)) dut (
         .clk(clk), .resetn(1'b1), .clk_pixel(clk_pixel), .clk_5x_pixel(1'b0),
@@ -139,40 +167,54 @@ module tb_frame_lock;
     integer    t_frame[0:32*320-1];
     integer    t_line [0:32*320-1];
     integer    t_col  [0:32*320-1];
+    reg        t_par  [0:32*320-1];
+    realtime   t_time [0:32*320-1];
     integer    i;
-    initial for (i = 0; i < 32 * 320; i = i + 1) begin t_ok[i] = 0; t_frame[i] = -1; t_line[i] = -1; t_col[i] = -1; end
+    initial for (i = 0; i < 32 * 320; i = i + 1) begin t_ok[i] = 0; t_frame[i] = -1; t_line[i] = -1; t_col[i] = -1; t_par[i] = 0; t_time[i] = 0; end
     always @(posedge clk) begin
         if (dut.ce_pix & ~dut.ce_pix_r) begin
             t_ok[dut.mem_portA_addr]    = ~hblank & ~vblank & (x < W);
             t_frame[dut.mem_portA_addr] = frame;
             t_line[dut.mem_portA_addr]  = y;
             t_col[dut.mem_portA_addr]   = x;
+            t_par[dut.mem_portA_addr]   = field_par;
+            t_time[dut.mem_portA_addr]  = $realtime;
         end
     end
 
     // ---- the reads --------------------------------------------------------------------
     integer exp_frame = 0;
+    reg     exp_par = 0;
     reg     checking = 0;
     integer n_read = 0, bad = 0, bad_total = 0;
+    realtime rd_age, rd_age_min = 1e12;         // write-to-read age of checked reads
+    integer frame_w0 = 0;                       // field count at the window start
     reg     used;
     wire    b_read = dut.sm_rd_b;
     reg     [7:0] want_line;
     always @(posedge clk_pixel) begin
-        if (dut.cy == dut.sl_pic_top && dut.cx == 11'd100)
+        if (dut.cy == dut.sl_pic_top && dut.cx == 11'd100) begin
             exp_frame = frame;
-        used = checking && dut.active && dut.sl_show && dut.cy < 10'd720 && ({2'b00, dut.xx} < W)
+            exp_par = field_par;
+        end
+        used = checking && !forgive && dut.active && dut.sl_show && dut.cy < 10'd720 && ({2'b00, dut.xx} < W)
                && (!b_read || (dut.sm_mode != 2'd0 && dut.wy != 8'd0));
         if (used) begin
             want_line = dut.ysel;
             n_read = n_read + 1;
             if (!t_ok[dut.mem_portB_addr] || t_frame[dut.mem_portB_addr] != exp_frame
-                || t_line[dut.mem_portB_addr] != want_line || t_col[dut.mem_portB_addr] != dut.xx) begin
+                || t_line[dut.mem_portB_addr] != want_line || t_col[dut.mem_portB_addr] != dut.xx
+                || (((ilace != 0) || (dres != 0)) && t_par[dut.mem_portB_addr] != exp_par)) begin
                 bad = bad + 1;
                 if (bad <= 10)
-                    $display("UNWRITTEN %0dx%0d cy=%0d cx=%0d: read line %0d (shown %0d) col %0d (%s): found ok=%b frame %0d (want %0d) line %0d col %0d",
+                    $display("UNWRITTEN %0dx%0d cy=%0d cx=%0d: read line %0d (shown %0d) col %0d (%s): found ok=%b frame %0d (want %0d) line %0d col %0d par %b (want %b)",
                              W, H, dut.cy, dut.cx, want_line, dut.yy_s, dut.xx, b_read ? "neighbour" : "shown",
                              t_ok[dut.mem_portB_addr], t_frame[dut.mem_portB_addr], exp_frame,
-                             t_line[dut.mem_portB_addr], t_col[dut.mem_portB_addr]);
+                             t_line[dut.mem_portB_addr], t_col[dut.mem_portB_addr],
+                             t_par[dut.mem_portB_addr], exp_par);
+            end else begin
+                rd_age = $realtime - t_time[dut.mem_portB_addr];
+                if (rd_age < rd_age_min) rd_age_min = rd_age;
             end
         end
     end
@@ -313,9 +355,15 @@ module tb_frame_lock;
     integer lock_took = 0, relock_pause = 0, relock_reset = 0;
 
     task checkpoint(input [8*40-1:0] what, input integer max_new_bad, input integer max_new_wait);
+        integer fields_w;
         begin
-            $display("lock %0dx%0d %0s: %0d HDMI frames, %0d reads, waits %0.1f..%0.1f us over %0d halts, audio max run %0d words",
-                     W, H, what, frames_seen, n_read, wait_min / 1000.0, wait_max / 1000.0, waits, max_run);
+            fields_w = frame - frame_w0;
+            $display("lock %0dx%0d %0s: %0d HDMI frames, %0d fields, %0d reads (min age %0.1f us), waits %0.1f..%0.1f us over %0d halts, audio max run %0d words",
+                     W, H, what, frames_seen, fields_w, n_read, rd_age_min / 1000.0, wait_min / 1000.0, wait_max / 1000.0, waits, max_run);
+            if (waits < fields_w - 1 || waits > fields_w + 1) begin
+                $display("FAIL %0s: %0d halts for %0d fields (want one per field)", what, waits, fields_w);
+                $fatal(1, "tb_frame_lock: FAIL");
+            end
             if (bad > max_new_bad) begin
                 $display("FAIL %0s: %0d bad reads", what, bad);
                 $fatal(1, "tb_frame_lock: FAIL");
@@ -328,6 +376,43 @@ module tb_frame_lock;
     endtask
 
     initial begin
+        #1;                                     // let the plusargs land first
+        if (short_mode) begin
+            // interlace / double-res / mode switch: lock, then settled fields
+            checking = 0;
+            await_lock(lock_took);
+            $display("lock %0dx%0d ilace=%0d dres=%0d wswitch=%0d hswitch=%0d: locked after %0d HDMI frames",
+                     W, H, ilace, dres, wswitch, hswitch, lock_took);
+            checking = 1;
+            frames_seen = 0;
+            bad = 0; wait_viol = 0; period_viol = 0; waits = 0; wait_min = 1e12; wait_max = 0;
+            n_read = 0; aud_change_while_paused = 0; max_run = 0; run = 0; aud_words = 0;
+            frame_w0 = frame; rd_age_min = 1e12;
+            wait_hdmi_frames(10);
+            if (wswitch || hswitch) begin
+                while (!pause_core) @(posedge clk);
+                if (wswitch) W = (W == 320) ? 256 : 320;
+                if (hswitch) H = (H == 224) ? 240 : 224;
+                $display("mode switch to %0dx%0d at a halt", W, H);
+                forgive = 1; wait_hdmi_frames(1); forgive = 0;
+                wait_hdmi_frames(5);
+                while (!pause_core) @(posedge clk);
+                if (wswitch) W = (W == 320) ? 256 : 320;
+                if (hswitch) H = (H == 224) ? 240 : 224;
+                $display("mode switch back to %0dx%0d at a halt", W, H);
+                forgive = 1; wait_hdmi_frames(1); forgive = 0;
+                wait_hdmi_frames(5);
+            end
+            checking = 0;
+            checkpoint("short-settled", 0, 0);
+            if (period_viol != 0) begin $display("FAIL short-settled: %0d bad periods", period_viol); $fatal(1, "tb_frame_lock: FAIL"); end
+            if (aud_change_while_paused != 0) begin $display("FAIL short-settled: audio moved while paused"); $fatal(1, "tb_frame_lock: FAIL"); end
+            if (aud_x != 0) begin $display("FAIL short-settled: %0d X audio words", aud_x); $fatal(1, "tb_frame_lock: FAIL"); end
+            if (max_run > 8) begin $display("FAIL short-settled: audio max run %0d > 8", max_run); $fatal(1, "tb_frame_lock: FAIL"); end
+            $display("tb_frame_lock %0dx%0d ilace=%0d dres=%0d wswitch=%0d hswitch=%0d: PASS, %0d HDMI frames (lock %0d), audio words %0d max run %0d",
+                     W, H, ilace, dres, wswitch, hswitch, hdmi_frames, lock_took, aud_words, max_run);
+            $finish;
+        end
         // startup: await the lock, then check 10 locked frames with no
         // forgiveness (pre-lock transients precede the lock by construction)
         checking = 0;
@@ -337,6 +422,7 @@ module tb_frame_lock;
         frames_seen = 0;
         bad = 0; wait_viol = 0; period_viol = 0; waits = 0; wait_min = 1e12; wait_max = 0;
         n_read = 0; aud_change_while_paused = 0; max_run = 0; run = 0; aud_words = 0;
+        frame_w0 = frame; rd_age_min = 1e12;
         wait_hdmi_frames(10);
         checking = 0;
         checkpoint("settled", 0, 0);
@@ -352,6 +438,7 @@ module tb_frame_lock;
         checking = 1;
         frames_seen = 0;
         bad = 0; wait_viol = 0; waits = 0; wait_min = 1e12; wait_max = 0; n_read = 0;
+        frame_w0 = frame; rd_age_min = 1e12;
         wait_hdmi_frames(8);
         checking = 0;
         checkpoint("post-pause", 0, 0);
@@ -369,6 +456,7 @@ module tb_frame_lock;
         checking = 1;
         frames_seen = 0;
         bad = 0; wait_viol = 0; waits = 0; wait_min = 1e12; wait_max = 0; n_read = 0;
+        frame_w0 = frame; rd_age_min = 1e12;
         wait_hdmi_frames(8);
         checking = 0;
         checkpoint("post-reset", 0, 0);
