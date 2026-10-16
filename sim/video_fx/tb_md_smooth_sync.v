@@ -103,6 +103,7 @@ module tb_md_smooth_sync;
         .clk(clk), .resetn(1'b1), .clk_pixel(clk_pixel), .clk_5x_pixel(1'b0),
         .ce_pix(ce_pix & hsync_seen), .r(pr), .g(pg), .b(pb), .x(x), .y(y),
         .width(W), .height(H), .pause_core(pause_core),
+        .std_timing(1'b0),
         .overlay(ov), .overlay_x(ovx), .overlay_y(ovy), .overlay_color(15'd0),
         .scanlines(sl_on), .sl_darkness(sl_dark), .sl_thick(sl_thick), .sl_out(sl_out),
         .video_config(vcfg),

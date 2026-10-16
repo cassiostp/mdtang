@@ -47,6 +47,7 @@ module tb_md_regress;
         .clk(clk), .resetn(1'b1), .clk_pixel(clk_pixel), .clk_5x_pixel(1'b0),
         .ce_pix(1'b0), .r(4'd0), .g(4'd0), .b(4'd0), .x(9'd0), .y(8'd0),
         .width(W), .height(H),
+        .std_timing(1'b0),
         .overlay(ov), .overlay_x(ovx_n), .overlay_y(ovy_n), .overlay_color(ovc_n),
         .scanlines(sl_on), .sl_darkness(sl_dark), .sl_thick(sl_thick), .sl_out(sl_out),
         .video_config(vcfg),

@@ -21,11 +21,14 @@ git show $BASE:src/scanlines.v | sed \
 git show $FXBASE:src/framebuffer_sync.sv | sed -e 's/^module framebuffer #(/module framebuffer_fx #(/' > build/framebuffer_sync_fx.sv
 # Native rate: the differential benches (tb_md_regress, tb_md_smooth_regress)
 # compare the new scaler against these baselines clock for clock, so both
-# sides must run the shipped 1652-clock line. The old sources predate the
-# NATIVE_FRAME_WIDTH parameter (their std_timing floats, which the stub reads
-# as native); give their hdmi instance the native width explicitly.
+# sides must run the shipped 1652-clock line. The old sources predate
+# std_timing/NATIVE_FRAME_WIDTH; give their hdmi instance both explicitly
+# (an unconnected std_timing is X with the shared hdmi.sv select).
 sed -i -e 's/\.START_Y(0) )/.START_Y(0), .NATIVE_FRAME_WIDTH(1652) )/' \
+    -e "s/hdmi( \.clk_pixel_x5/hdmi( .std_timing(1'b0), .clk_pixel_x5/" \
     build/framebuffer_sync_base.sv build/framebuffer_sync_fx.sv
+grep -q "hdmi( .std_timing(1'b0)" build/framebuffer_sync_base.sv
+grep -q "hdmi( .std_timing(1'b0)" build/framebuffer_sync_fx.sv
 grep -q '^module framebuffer_fx #(' build/framebuffer_sync_fx.sv
 grep -q '^module framebuffer_base #(' build/framebuffer_sync_base.sv
 grep -q '^sl_rows_base sl (' build/framebuffer_sync_base.sv
