@@ -41,7 +41,7 @@ module framebuffer #(
     input scanlines,                // core_config[16]: scanlines on
     input [1:0] sl_darkness,        // core_config[19:18]: 25, 50, 75, 100 % dark
     input sl_thick,                 // core_config[20]: thick lines
-    input sl_out,                   // core_config[21]: dark output rows instead of an integer scale
+    input sl_out,                   // core_config[21]: scale, 0 = integer, 1 = full
     input [31:0] video_config,      // colour controls and the CRT mask, see video_fx.v (the LCD grid is unused)
 
     input std_timing,               // 1: standard 60.00 Hz 720p, 0: native console rate (see hdmi.sv)
