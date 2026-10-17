@@ -1,7 +1,9 @@
 // framebuffer (framebuffer_sync.sv, with video_fx) against the scaler before video_fx (the baseline,
 // built from the git history by prep.sh as framebuffer_base): a video_config that enables nothing
 // must give the very same rgb stream into the hdmi module, clock for clock, in every scanline mode,
-// with the menu overlay up or not. The words tried: 0, what the firmware sends with every filter
+// with the menu overlay up or not. Scanlines-off runs in Full scale: with Scale Integer the
+// picture uses the integer geometry even with scanlines off, which the baseline predates.
+// The words tried: 0, what the firmware sends with every filter
 // off (the strengths at 1), and one with the LCD grid bit set, which the Mega Drive ignores.
 // One simulation is one frame size, +W=256|320 +H=224|240 (run.sh runs the four).
 // The line buffer holds a pseudo-random picture (every ring row and column differs) and the overlay
@@ -132,9 +134,9 @@ module tb_md_regress;
     initial begin
         // the first frame runs the pipelines empty; the settings are applied in its blanking
         wait_row730;
-        variant(0, 0, 0, 2, 0, OFF);
-        variant(0, 0, 0, 2, 0, FW_OFF);
-        variant(0, 0, 0, 2, 0, GRID);
+        variant(0, 1, 0, 2, 0, OFF);            // scanlines off, Full scale: the baseline's geometry
+        variant(0, 1, 0, 2, 0, FW_OFF);
+        variant(0, 1, 0, 2, 0, GRID);
         variant(1, 0, 0, 2, 0, OFF);            // integer scale, thin
         variant(1, 0, 0, 2, 0, FW_OFF);
         variant(1, 0, 1, 0, 0, FW_OFF);         // thick, 25 %

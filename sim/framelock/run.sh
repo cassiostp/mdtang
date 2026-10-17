@@ -11,7 +11,7 @@ cd "$(dirname "$0")"
 RTL=../../src
 HDMI=../scanlines/hdmi_stub.v
 SIZES="320x224 256x224 320x240 256x240"
-iverilog -g2012 -o tb_frame_lock.out tb_frame_lock.v $HDMI $RTL/framebuffer_sync.sv $RTL/scanlines.v $RTL/video_fx.v $RTL/smooth.v
+iverilog -g2012 -o tb_frame_lock.out tb_frame_lock.v $HDMI $RTL/framebuffer_sync.sv $RTL/scanlines.v $RTL/video_fx.v
 for s in $SIZES; do
     vvp tb_frame_lock.out +W=${s%x*} +H=${s#*x}
 done

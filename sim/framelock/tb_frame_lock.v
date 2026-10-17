@@ -11,7 +11,8 @@
 //  - the core waits at the sync point every frame (steady wait band) and
 //    re-locks within 2 frames of a menu pause and a core reset;
 //  - every line-buffer read of the picture finds its pixel written in this
-//    frame (no tearing), as in tb_md_smooth_sync;
+//    frame (no tearing): the single read per source column must land after
+//    the VDP wrote the line and before it is overwritten;
 //  - the audio sample holds while the core is paused (the frame-sync halt
 //    must hold, never inject silence) and advances otherwise, with a small
 //    max repeat at the HDMI audio clock.
@@ -55,14 +56,20 @@ module tb_frame_lock;
 
     reg menu_pause = 0;                         // menu pause: the whole machine holds (PAUSE_EN)
     reg core_reset = 0;                         // core reset: the VDP counters restart
-    reg [31:0] vcfg = 32'h1 << 18;              // sharp smoothing (covers the neighbour-line reads)
+    reg [31:0] vcfg = 32'h0;
+    // A height switch moves the Integer picture top (row 24 for 224 lines, row 0
+    // for 240): the first full frame in the new mode tears at the top while the
+    // halt re-phases (one frame; the waits return to the steady band after).
+    // The switch runs use Full scale instead (the firmware default), whose top
+    // stays at row 0; the progressive runs above keep Integer scale.
+    wire sl_out_tb = (hswitch != 0);
     wire pause_core;
 
     wire [7:0] ovx, ovy;
     wire [2:0] tmds_d_p, tmds_d_n;
     wire       tmds_clk_p, tmds_clk_n;
 
-    // ---- the VDP side (as in tb_md_smooth_sync) ----------------------------------------
+    // ---- the VDP side -------------------------------------------------------------
     localparam LINE = 3420, LINES_FRAME = 262;
     localparam NATIVE_HTOTAL = 1652, NATIVE_VTOTAL = 750;
     integer pix;
@@ -148,7 +155,7 @@ module tb_frame_lock;
         .width(W), .height(H), .pause_core(pause_core),
         .std_timing(1'b0),
         .overlay(1'b0), .overlay_x(ovx), .overlay_y(ovy), .overlay_color(15'd0),
-        .scanlines(1'b0), .sl_darkness(2'd0), .sl_thick(1'b0), .sl_out(1'b0),
+        .scanlines(1'b0), .sl_darkness(2'd0), .sl_thick(1'b0), .sl_out(sl_out_tb),
         .video_config(vcfg),
         .audio_left({aud[15:1], 1'b0}), .audio_right({aud[15:1], 1'b0}),
         .tmds_clk_n(tmds_clk_n), .tmds_clk_p(tmds_clk_p), .tmds_d_n(tmds_d_n), .tmds_d_p(tmds_d_p)
@@ -162,7 +169,7 @@ module tb_frame_lock;
         dut.audio_divider = 0;
     end
 
-    // ---- what was written where (as in tb_md_smooth_sync) ------------------------------
+    // ---- what was written where -----------------------------------------------------
     reg        t_ok   [0:32*320-1];
     integer    t_frame[0:32*320-1];
     integer    t_line [0:32*320-1];
@@ -190,25 +197,23 @@ module tb_frame_lock;
     realtime rd_age, rd_age_min = 1e12;         // write-to-read age of checked reads
     integer frame_w0 = 0;                       // field count at the window start
     reg     used;
-    wire    b_read = dut.sm_rd_b;
     reg     [7:0] want_line;
     always @(posedge clk_pixel) begin
         if (dut.cy == dut.sl_pic_top && dut.cx == 11'd100) begin
             exp_frame = frame;
             exp_par = field_par;
         end
-        used = checking && !forgive && dut.active && dut.sl_show && dut.cy < 10'd720 && ({2'b00, dut.xx} < W)
-               && (!b_read || (dut.sm_mode != 2'd0 && dut.wy != 8'd0));
+        used = checking && !forgive && dut.active && dut.sl_show && dut.cy < 10'd720 && ({2'b00, dut.xx} < W);
         if (used) begin
-            want_line = dut.ysel;
+            want_line = dut.yy_s;
             n_read = n_read + 1;
             if (!t_ok[dut.mem_portB_addr] || t_frame[dut.mem_portB_addr] != exp_frame
                 || t_line[dut.mem_portB_addr] != want_line || t_col[dut.mem_portB_addr] != dut.xx
                 || (((ilace != 0) || (dres != 0)) && t_par[dut.mem_portB_addr] != exp_par)) begin
                 bad = bad + 1;
                 if (bad <= 10)
-                    $display("UNWRITTEN %0dx%0d cy=%0d cx=%0d: read line %0d (shown %0d) col %0d (%s): found ok=%b frame %0d (want %0d) line %0d col %0d par %b (want %b)",
-                             W, H, dut.cy, dut.cx, want_line, dut.yy_s, dut.xx, b_read ? "neighbour" : "shown",
+                    $display("UNWRITTEN %0dx%0d cy=%0d cx=%0d: read line %0d col %0d: found ok=%b frame %0d (want %0d) line %0d col %0d par %b (want %b)",
+                             W, H, dut.cy, dut.cx, want_line, dut.xx,
                              t_ok[dut.mem_portB_addr], t_frame[dut.mem_portB_addr], exp_frame,
                              t_line[dut.mem_portB_addr], t_col[dut.mem_portB_addr],
                              t_par[dut.mem_portB_addr], exp_par);
