@@ -1,13 +1,13 @@
 // Frame lock at the native Genesis rate (sim/framelock).
-// Real framebuffer_sync.sv (with the 1652-clock native HDMI line) against a
+// Real framebuffer_sync.sv (with the 858-clock 480p120 HDMI line) against a
 // VDP-side model with the real timing: a line is 3420 clk cycles (320 or 256
 // active pixels of 8 or 10 clk, then the blanking), 262 lines per frame, the
 // x / y counters and the write enable are those of mdtang_top.sv, and the
 // core stops while pause_core is set. One simulation is one frame size,
 // +W=256|320 +H=224|240.
 // Checks:
-//  - the locked HDMI frame is exactly 1652x750 pixel clocks (the native
-//    59.9274 Hz rate), stable across the run;
+//  - the locked HDMI frame is exactly 858x525 pixel clocks (480p120,
+//    119.8801 Hz, game rate 59.9401 Hz), stable across the run;
 //  - the core waits at the sync point every frame (steady wait band) and
 //    re-locks within 2 frames of a menu pause and a core reset;
 //  - every line-buffer read of the picture finds its pixel written in this
@@ -32,7 +32,7 @@
 module tb_frame_lock;
 
     reg clk_pixel = 0, clk = 0;
-    always #6.734 clk_pixel = ~clk_pixel;       // 74.25 MHz
+    always #9.259 clk_pixel = ~clk_pixel;       // 54 MHz (480p120)
     always #9.286 clk = ~clk;                   // 53.846 MHz (50 x 28 / 26)
 
     integer w_arg, h_arg;
@@ -64,7 +64,7 @@ module tb_frame_lock;
 
     // ---- the VDP side (as in tb_md_smooth_sync) ----------------------------------------
     localparam LINE = 3420, LINES_FRAME = 262;
-    localparam NATIVE_HTOTAL = 1652, NATIVE_VTOTAL = 750;
+    localparam NATIVE_HTOTAL = 858, NATIVE_VTOTAL = 525;
     integer pix;
     integer lc = 0, ln = 0;
     reg     hblank = 1, vblank = 1, hsync = 0, ce_pix = 0;
@@ -163,16 +163,19 @@ module tb_frame_lock;
     end
 
     // ---- what was written where (as in tb_md_smooth_sync) ------------------------------
-    reg        t_ok   [0:32*320-1];
-    integer    t_frame[0:32*320-1];
-    integer    t_line [0:32*320-1];
-    integer    t_col  [0:32*320-1];
-    reg        t_par  [0:32*320-1];
-    realtime   t_time [0:32*320-1];
+    localparam FB_WORDS = 2 * 320 * 240;
+    reg        t_ok   [0:FB_WORDS-1];
+    integer    t_frame[0:FB_WORDS-1];
+    integer    t_line [0:FB_WORDS-1];
+    integer    t_col  [0:FB_WORDS-1];
+    reg        t_par  [0:FB_WORDS-1];
+    realtime   t_time [0:FB_WORDS-1];
     integer    i;
-    initial for (i = 0; i < 32 * 320; i = i + 1) begin t_ok[i] = 0; t_frame[i] = -1; t_line[i] = -1; t_col[i] = -1; t_par[i] = 0; t_time[i] = 0; end
+    initial for (i = 0; i < FB_WORDS; i = i + 1) begin t_ok[i] = 0; t_frame[i] = -1; t_line[i] = -1; t_col[i] = -1; t_par[i] = 0; t_time[i] = 0; end
+    // y==240 is the pause row and is not stored. 240*320 aliases the other
+    // bank's pixel 0, so a shadow write there would hide a real pixel.
     always @(posedge clk) begin
-        if (dut.ce_pix & ~dut.ce_pix_r) begin
+        if (dut.ce_pix & ~dut.ce_pix_r && y < 8'd240) begin
             t_ok[dut.mem_portA_addr]    = ~hblank & ~vblank & (x < W);
             t_frame[dut.mem_portA_addr] = frame;
             t_line[dut.mem_portA_addr]  = y;
@@ -192,19 +195,31 @@ module tb_frame_lock;
     reg     used;
     wire    b_read = dut.sm_rd_b;
     reg     [7:0] want_line;
+    reg     par_set = 0, par_seen = 0;
+    integer frame_seen = 0, frame_set = 0;
     always @(posedge clk_pixel) begin
-        if (dut.cy == dut.sl_pic_top && dut.cx == 11'd100) begin
-            exp_frame = frame;
-            exp_par = field_par;
+        if (dut.cx == 11'd0 && dut.cy == 10'd0) begin
+            par_set = 0;
+            frame_set = 0;
         end
-        used = checking && !forgive && dut.active && dut.sl_show && dut.cy < 10'd720 && ({2'b00, dut.xx} < W)
+        used = checking && !forgive && dut.active && dut.sl_show && dut.cy < 10'd480 && ({2'b00, dut.xx} < W)
                && (!b_read || (dut.sm_mode != 2'd0 && dut.wy != 8'd0));
         if (used) begin
             want_line = dut.ysel;
             n_read = n_read + 1;
-            if (!t_ok[dut.mem_portB_addr] || t_frame[dut.mem_portB_addr] != exp_frame
+            // The bank on screen is a finished field, not the one the VDP is
+            // writing. One frame id and one field parity for the whole refresh
+            // means the two banks are not mixed.
+            if (!par_set) begin
+                par_seen = t_par[dut.mem_portB_addr];
+                frame_seen = t_frame[dut.mem_portB_addr];
+                par_set = 1;
+                frame_set = 1;
+            end
+            if (!t_ok[dut.mem_portB_addr]
                 || t_line[dut.mem_portB_addr] != want_line || t_col[dut.mem_portB_addr] != dut.xx
-                || (((ilace != 0) || (dres != 0)) && t_par[dut.mem_portB_addr] != exp_par)) begin
+                || t_frame[dut.mem_portB_addr] != frame_seen
+                || (((ilace != 0) || (dres != 0)) && t_par[dut.mem_portB_addr] != par_seen)) begin
                 bad = bad + 1;
                 if (bad <= 10)
                     $display("UNWRITTEN %0dx%0d cy=%0d cx=%0d: read line %0d (shown %0d) col %0d (%s): found ok=%b frame %0d (want %0d) line %0d col %0d par %b (want %b)",
@@ -258,7 +273,7 @@ module tb_frame_lock;
     integer pix_clks = 0;
     integer frames_seen = 0;
     integer period_viol = 0;
-    localparam integer NATIVE_PERIOD = NATIVE_HTOTAL * NATIVE_VTOTAL;   // 1239000
+    localparam integer NATIVE_PERIOD = NATIVE_HTOTAL * NATIVE_VTOTAL;   // 858*525 = 450450
     always @(posedge clk_pixel) begin
         pix_clks = pix_clks + 1;
         if (dut.cx == 11'd0 && dut.cy == 10'd0) begin

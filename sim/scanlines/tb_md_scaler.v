@@ -18,6 +18,7 @@ module tb_md_scaler;
 
     reg        sl_on = 0, sl_thick = 0, sl_out = 0, ov = 0;
     reg  [1:0] sl_dark = 0;
+    reg [31:0] vcfg = 0;
     reg [10:0] W = 256;
     reg  [9:0] H = 224;
     wire [7:0] overlay_x, overlay_y;
@@ -32,24 +33,24 @@ module tb_md_scaler;
         .width(W), .height(H), .pause_core(pause_core),
         .std_timing(1'b0),
         .overlay(ov), .overlay_x(overlay_x), .overlay_y(overlay_y), .overlay_color(overlay_color),
-        .scanlines(sl_on), .sl_darkness(sl_dark), .sl_thick(sl_thick), .sl_out(sl_out), .video_config(32'd0),
+        .scanlines(sl_on), .sl_darkness(sl_dark), .sl_thick(sl_thick), .sl_out(sl_out), .video_config(vcfg),
         .audio_left(16'd0), .audio_right(16'd0),
         .tmds_clk_n(tmds_clk_n), .tmds_clk_p(tmds_clk_p), .tmds_d_n(tmds_d_n), .tmds_d_p(tmds_d_p)
     );
     initial dut.pause_core = 1'b0;
 
-    // what the HDMI sink would show: rgb while cx = x + 1
-    reg [23:0] img [0:1280*720-1];
-    reg        first_line_seen [0:749];
+    // what the HDMI sink would show: rgb while cx = x + 1. 480p active is 720x480.
+    reg [23:0] img [0:720*480-1];
+    reg        first_line_seen [0:524];
     always @(posedge clk_pixel) begin
-        if (dut.cy < 10'd720 && dut.cx >= 11'd1 && dut.cx <= 11'd1280)
-            img[dut.cy * 1280 + dut.cx - 1] = dut.rgb;
+        if (dut.cy < 10'd480 && dut.cx >= 11'd1 && dut.cx <= 11'd720)
+            img[dut.cy * 720 + dut.cx - 1] = dut.rgb;
         if (dut.cx == 11'd700)
             first_line_seen[dut.cy] = dut.hdmi_first_line;
     end
 
     localparam BORDER = 24'h303030;
-    localparam R = 3;
+    localparam R = 2;                          // 480p integer scale: 2 rows per source line
 
     // source picture: line l has colour src_color(l) (RGB4), or, when by_column is
     // set, column c has colour col_color(c)
@@ -80,27 +81,27 @@ module tb_md_scaler;
     function integer exp_line(input integer row);
         begin
             if (cur_geom)
-                exp_line = (row < (720 - R * H) / 2 || row >= (720 + R * H) / 2) ? -1 : (row - (720 - R * H) / 2) / R;
+                exp_line = (row < (480 - R * H) / 2 || row >= (480 + R * H) / 2) ? -1 : (row - (480 - R * H) / 2) / R;
             else
-                exp_line = row * H / 720;
+                exp_line = row * H / 480;
         end
     endfunction
 
     // the VDP: the line an output row needs is in the line buffer before the row starts
     integer fl, fc;
     always @(dut.cy) begin
-        if (dut.cy < 10'd720) begin
+        if (dut.cy < 10'd480) begin
             fl = exp_line(dut.cy);
             if (fl >= 0 && !by_column)
                 for (fc = 0; fc < 320; fc = fc + 1)
-                    dut.mem[(fl % 32) * 320 + fc] = src_color(fl);
+                    dut.mem[fl * 320 + fc] = src_color(fl);
         end
     end
 
     task load_columns;
         integer sl, c;
         begin
-            for (sl = 0; sl < 32; sl = sl + 1)
+            for (sl = 0; sl < 240; sl = sl + 1)
                 for (c = 0; c < 320; c = c + 1)
                     dut.mem[sl * 320 + c] = col_color(c);
         end
@@ -126,8 +127,8 @@ module tb_md_scaler;
     task settle;
         begin
             repeat (settle_frames) begin
-                while (dut.cy != 10'd725) @(posedge clk_pixel);
-                while (dut.cy == 10'd725) @(posedge clk_pixel);
+                while (dut.cy != 10'd510) @(posedge clk_pixel);
+                while (dut.cy == 10'd510) @(posedge clk_pixel);
             end
             settle_frames = 1;
         end
@@ -148,11 +149,11 @@ module tb_md_scaler;
     task check_rows(input on, input out, input thick, input [1:0] dk, input over);
         begin
             is_geom = on & ~out & ~over;
-            nd = thick ? 2 : 1;
-            XP = 640;
-            ptop = is_geom ? (720 - R * H) / 2 : 0;
-            for (row = 0; row < 720; row = row + 1) begin
-                got = img[row * 1280 + XP];
+            nd = 1;                                 // 2 rows per line: thin and thick are both one dark row
+            XP = 360;                               // centre of the 720-wide frame, inside both 512 and 640
+            ptop = is_geom ? (480 - R * H) / 2 : 0;
+            for (row = 0; row < 480; row = row + 1) begin
+                got = img[row * 720 + XP];
                 line = exp_line(row);
                 if (over)
                     want = overlay_rgb(overlay_color);
@@ -164,11 +165,11 @@ module tb_md_scaler;
                         want = darken(want, dk);
                 end
                 if (got !== want) fail("picture", row, got, want);
-                if (img[row * 1280 + 100] !== BORDER) fail("left border", row, img[row * 1280 + 100], BORDER);
-                if (img[row * 1280 + 1200] !== BORDER) fail("right border", row, img[row * 1280 + 1200], BORDER);
+                if (img[row * 720 + 0] !== BORDER) fail("left border", row, img[row * 720 + 0], BORDER);
+                if (img[row * 720 + 719] !== BORDER) fail("right border", row, img[row * 720 + 719], BORDER);
             end
-            // the core is released at the first row of the picture
-            for (row = 0; row < 750; row = row + 1)
+            // picture-top marker (the core itself is released on even frames; see framelock)
+            for (row = 0; row < 525; row = row + 1)
                 if (first_line_seen[row] !== (row == ptop)) begin
                     $display("FAIL: hdmi_first_line at row %0d is %b (picture top %0d)", row, first_line_seen[row], ptop);
                     $fatal(1, "tb_md_scaler: FAIL");
@@ -179,11 +180,11 @@ module tb_md_scaler;
     // horizontal extent and pixel widths on a row through the middle of the picture
     task check_columns(input geom);
         begin
-            pw = (geom && H == 224) ? 896 : 960;
-            row = 360;
+            pw = W * 2;                             // integer 2x
+            row = 240;
             first = -1; last = -1; runs = 0; minrun = 99; maxrun = 0; runlen = 0; prev = BORDER;
-            for (x = 0; x < 1280; x = x + 1) begin
-                got = img[row * 1280 + x];
+            for (x = 0; x < 720; x = x + 1) begin
+                got = img[row * 720 + x];
                 if (got !== BORDER) begin
                     if (first < 0) first = x;
                     last = x;
@@ -199,8 +200,8 @@ module tb_md_scaler;
                 prev = got;
             end
             w = last - first + 1;
-            if (first !== (1280 - pw) / 2 || w !== pw) begin
-                $display("FAIL: picture spans x=%0d..%0d (width %0d), want %0d..%0d (%0dx%0d geom=%b)", first, last, w, (1280 - pw) / 2, (1280 + pw) / 2 - 1, W, H, geom);
+            if (first !== (720 - pw) / 2 || w !== pw) begin
+                $display("FAIL: picture spans x=%0d..%0d (width %0d), want %0d..%0d (%0dx%0d geom=%b)", first, last, w, (720 - pw) / 2, (720 + pw) / 2 - 1, W, H, geom);
                 $fatal(1, "tb_md_scaler: FAIL");
             end
             if (runs !== W) begin
@@ -272,6 +273,65 @@ module tb_md_scaler;
         columns(0, 0); columns(1, 0);
         W = 320; H = 240;
         columns(0, 0); columns(1, 0);
+
+        // BFI: video_config[21:20]. Off shows the frame twice; black and
+        // rolling (3, treated as black) blank every other refresh; dim halves
+        // it. The overlay stays lit on both.
+        begin : bfi
+            reg [23:0] a, b, lit;
+            integer bi;
+            sl_on = 0; sl_out = 0; ov = 0; W = 320; H = 224; by_column = 0;
+            vcfg = 32'd0;
+            settle; settle;
+            a = img[200 * 720 + 360];
+            settle;
+            b = img[200 * 720 + 360];
+            if (a !== b || a === 24'h0 || a === BORDER) begin
+                $display("FAIL: BFI off frames %h %h", a, b);
+                $fatal(1, "tb_md_scaler: FAIL");
+            end
+            lit = a;
+            vcfg = 32'd1 << 20;                    // mode 1, black
+            settle; settle;
+            a = img[200 * 720 + 360];
+            settle;
+            b = img[200 * 720 + 360];
+            if (!((a === lit && b === 24'h0) || (b === lit && a === 24'h0))) begin
+                $display("FAIL: BFI black frames %h %h, lit %h", a, b, lit);
+                $fatal(1, "tb_md_scaler: FAIL");
+            end
+            vcfg = 32'd3 << 20;                    // mode 3, same as black
+            settle; settle;
+            a = img[200 * 720 + 360];
+            settle;
+            b = img[200 * 720 + 360];
+            if (!((a === lit && b === 24'h0) || (b === lit && a === 24'h0))) begin
+                $display("FAIL: BFI rolling-as-black frames %h %h", a, b);
+                $fatal(1, "tb_md_scaler: FAIL");
+            end
+            vcfg = 32'd2 << 20;                    // mode 2, dim
+            settle; settle;
+            a = img[200 * 720 + 360];
+            settle;
+            b = img[200 * 720 + 360];
+            if (!((a === lit && b === {1'b0, lit[23:17], 1'b0, lit[15:9], 1'b0, lit[7:1]}) ||
+                  (b === lit && a === {1'b0, lit[23:17], 1'b0, lit[15:9], 1'b0, lit[7:1]}))) begin
+                $display("FAIL: BFI dim frames %h %h, lit %h", a, b, lit);
+                $fatal(1, "tb_md_scaler: FAIL");
+            end
+            vcfg = 32'd1 << 20;
+            ov = 1;
+            settle; settle;
+            a = img[200 * 720 + 360];
+            settle;
+            b = img[200 * 720 + 360];
+            if (a !== overlay_rgb(overlay_color) || b !== a) begin
+                $display("FAIL: BFI under overlay %h %h", a, b);
+                $fatal(1, "tb_md_scaler: FAIL");
+            end
+            ov = 0; vcfg = 0;
+            $display("framebuffer BFI modes 0/1/2/3 and overlay: ok");
+        end
         $display("tb_md_scaler: PASS");
         $finish;
     end

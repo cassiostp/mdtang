@@ -1,6 +1,6 @@
 #!/bin/sh
 # Frame-lock sim at the native Genesis rate (iverilog). From this directory: ./run.sh
-#   tb_frame_lock   real framebuffer_sync.sv (1652-clock native HDMI line) against the
+#   tb_frame_lock   real framebuffer_sync.sv (858-clock 480p120 HDMI line) against the
 #                   VDP-side model with the real 3420x262 timing: locked HDMI period,
 #                   steady halt per frame, re-lock after a menu pause and a core
 #                   reset, no stale line-buffer reads, audio holds while paused;

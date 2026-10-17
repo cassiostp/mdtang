@@ -50,6 +50,12 @@ wire [6:0] text_char = reg_char_di[6:0];
 // $000-$37F: Character buffer RAM (32*28)
 // $380-$3FF: Logo ROM (14*9 bytes)
 // $400-$800: Font ROM
+`ifdef SIM
+reg [7:0] sim_mem [0:2047];
+integer sim_i;
+initial for (sim_i = 0; sim_i < 2048; sim_i = sim_i + 1) sim_mem[sim_i] = 8'd0;
+always @(posedge hclk) mem_do_b <= sim_mem[mem_addr_b];
+`else
 gowin_dpb_menu menu_mem (
     .clka(clk), .reseta(1'b0), .ocea(), .cea(1'b1), 
     .ada({1'b0, text_y, text_x}), .wrea(reg_char_we[0] && cmd == 2'd0),
@@ -59,9 +65,11 @@ gowin_dpb_menu menu_mem (
     .adb(mem_addr_b), .wreb(1'b0), 
     .dinb(), .doutb(mem_do_b)
 );
+`endif
 
 reg [6:0] logo_addr;
 reg [2:0] logo_xoff;
+reg [2:0] font_xoff;
 reg logo_active;
 reg [14:0] color_buf;
 reg [7:0] x_r;
@@ -84,7 +92,10 @@ always @* begin             // address and output logic
         if (logo_active)
             color = mem_do_b[logo_xoff] ? COLOR_LOGO : COLOR_BACK;
         else
-            color = mem_do_b[x[2:0]] ? (is_cursor ? COLOR_CURSOR : COLOR_TEXT) : COLOR_BACK;
+            // Latched bit offset, not the live x: at 480p each overlay pixel
+            // holds for only 2 HDMI clocks, so x has already advanced when
+            // its font byte arrives.
+            color = mem_do_b[font_xoff] ? (is_cursor ? COLOR_CURSOR : COLOR_TEXT) : COLOR_BACK;
     end
     default: mem_addr_b = 0;
     endcase
@@ -112,6 +123,7 @@ always @(posedge hclk) begin    // actual state machine
         logo_y = y - LOGO_Y;
         logo_addr <= {logo_y, 3'b0} + logo_y + logo_x[6:3];
         logo_xoff <= logo_x[2:0];
+        font_xoff <= x[2:0];
         is_cursor <= x[7:3] == 0;
     end
 

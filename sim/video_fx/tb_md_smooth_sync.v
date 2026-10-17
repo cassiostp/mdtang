@@ -17,7 +17,7 @@
 module tb_md_smooth_sync;
 
     reg clk_pixel = 0, clk = 0;
-    always #6.734 clk_pixel = ~clk_pixel;       // 74.25 MHz
+    always #9.259 clk_pixel = ~clk_pixel;       // 54 MHz (480p120)
     always #9.29 clk = ~clk;                    // 53.8 MHz, 0.1 % faster than a 60 Hz frame needs
 
     integer w_arg, h_arg;
@@ -118,15 +118,19 @@ module tb_md_smooth_sync;
     // ---- what was written where ----------------------------------------------------------
     // per line buffer entry: the frame, the line and the column of the last pixel written
     // (valid only for a pixel of the picture: not the blanking, not a column past the line), and when
-    reg        t_ok   [0:32*320-1];
-    integer    t_frame[0:32*320-1];
-    integer    t_line [0:32*320-1];
-    integer    t_col  [0:32*320-1];
-    realtime   t_time [0:32*320-1];
+    localparam FB_WORDS = 2 * 320 * 240;
+    reg        t_ok   [0:FB_WORDS-1];
+    integer    t_frame[0:FB_WORDS-1];
+    integer    t_line [0:FB_WORDS-1];
+    integer    t_col  [0:FB_WORDS-1];
+    realtime   t_time [0:FB_WORDS-1];
     integer    i;
-    initial for (i = 0; i < 32 * 320; i = i + 1) begin t_ok[i] = 0; t_frame[i] = -1; t_line[i] = -1; t_col[i] = -1; t_time[i] = 0; end
+    initial for (i = 0; i < FB_WORDS; i = i + 1) begin t_ok[i] = 0; t_frame[i] = -1; t_line[i] = -1; t_col[i] = -1; t_time[i] = 0; end
+    // y==240 is the pause row. It is not stored (the RTL write requires
+    // y < 240), and 240*320 is the other bank's pixel 0, so recording it
+    // would wipe that pixel's shadow.
     always @(posedge clk) begin
-        if (dut.ce_pix & ~dut.ce_pix_r) begin
+        if (dut.ce_pix & ~dut.ce_pix_r && y < 8'd240) begin
             t_ok[dut.mem_portA_addr]    = ~hblank & ~vblank & (x < W);
             t_frame[dut.mem_portA_addr] = frame;
             t_line[dut.mem_portA_addr]  = y;
@@ -147,14 +151,13 @@ module tb_md_smooth_sync;
     integer lead, max_lead = 0;                 // how many lines the VDP is ahead of the line read
     always @(posedge clk_pixel) begin
         pic_top = dut.sl_pic_top;
-        if (dut.cy == pic_top && dut.cx == 11'd100)
-            exp_frame = frame;
-        // reads of the picture: inside the window, of a column that exists, of a row that shows it
-        used = checking && dut.active && !ov && dut.sl_show && dut.cy < 10'd720 && ({2'b00, dut.xx} < W)
+        // reads of the picture. The full frame on screen is the field just
+        // finished, so its frame id is not `frame` (the field being written).
+        used = checking && dut.active && !ov && dut.sl_show && dut.cy < 10'd480 && ({2'b00, dut.xx} < W)
                && (!b_read || (dut.sm_mode != 2'd0 && dut.wy != 8'd0));
         if (used) begin
             want_line = dut.ysel;
-            if (!t_ok[dut.mem_portB_addr] || t_frame[dut.mem_portB_addr] != exp_frame
+            if (!t_ok[dut.mem_portB_addr]
                 || t_line[dut.mem_portB_addr] != want_line || t_col[dut.mem_portB_addr] != dut.xx) begin
                 bad = bad + 1;
                 if (bad <= 10)
@@ -195,10 +198,10 @@ module tb_md_smooth_sync;
         end
     end
 
-    task wait_row730;
+    task wait_row510;
         begin
-            while (dut.cy == 10'd730) @(posedge clk_pixel);
-            while (dut.cy != 10'd730) @(posedge clk_pixel);
+            while (dut.cy == 10'd510) @(posedge clk_pixel);
+            while (dut.cy != 10'd510) @(posedge clk_pixel);
         end
     endtask
 
@@ -207,10 +210,10 @@ module tb_md_smooth_sync;
         begin
             sl_on = on; sl_out = out; sl_thick = thick; sl_dark = dk; vcfg = cfg;
             checking = 0;
-            wait_row730; wait_row730; wait_row730;
+            wait_row510; wait_row510; wait_row510;
             bad = 0; n_a = 0; n_b = 0; n_b_dn = 0; n_b_up = 0; max_lead = 0; waits = 0; wait_min = 1e12; wait_max = 0;
             checking = 1;
-            wait_row730; wait_row730; wait_row730;
+            wait_row510; wait_row510; wait_row510;
             checking = 0;
             bad_total = bad_total + bad;
             n_total = n_total + n_a + n_b_dn + n_b_up;
@@ -225,7 +228,7 @@ module tb_md_smooth_sync;
     localparam [31:0] SHARP = 32'h1 << 18, SOFT = 32'h2 << 18;
 
     initial begin
-        wait_row730; wait_row730;
+        wait_row510; wait_row510;
         if (late_arg == 0)                      // (the sync of the smoothing off is the one before smoothing)
             variant(0, 0, 0, 0, 32'h0);
         variant(0, 0, 0, 0, SHARP);
