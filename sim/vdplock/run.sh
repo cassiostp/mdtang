@@ -27,7 +27,7 @@ else
     DEFS=""
 fi
 # shellcheck disable=SC2086
-$VLT --binary --timing -j4 --top-module tb_vdp_lock -Mdir build/obj \
+$VLT --binary --timing -j 4 --top-module tb_vdp_lock -Mdir build/obj \
     -Wno-PINMISSING -Wno-IMPLICIT -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-CASEINCOMPLETE -Wno-UNDRIVEN -Wno-COMBDLY -Wno-ALWCOMBORDER \
     $DEFS \
     /w/sim/vdplock/tb_vdp_lock.v $VDP \
