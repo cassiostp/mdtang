@@ -16,13 +16,17 @@
 //  - the audio sample holds while the core is paused (the frame-sync halt
 //    must hold, never inject silence) and advances otherwise, with a small
 //    max repeat at the HDMI audio clock.
-// Interlace (+ILACE=1 mode 1, +DRES=1 double-res mode 2): the core's field
-// is always 3420x262 clocks (V_TOTAL_HEIGHT has no interlace term) and the
-// top drops FIELD/INTERLACE, so the scaler sees each field as a progressive
-// frame of H lines; in double-res the two fields carry alternate rows of
-// the 2*H-line picture. The model then toggles a field parity per field
-// (encoded in the pixel data for +DRES) and the read check also requires
-// the current field's parity, with exactly one halt per field while locked.
+// Interlace (+ILACE=1 mode 1, +DRES=1 double-res mode 2): the VDP-side model
+// keeps each field at a flat 3420x262 clocks (the real VDP alternates
+// 262/263 per V_TOTAL_HEIGHT since fix/md-interlace-lines, and mdtang_top
+// runs interlaced modes free, so this exercises the scaler's per-field halt
+// path, not the VDP cadence); the top drops FIELD/INTERLACE (only the new
+// INTERLACE_ANY reaches the pause gate), so the scaler sees each field as a
+// progressive frame of H lines; in double-res the two fields carry alternate
+// rows of the 2*H-line picture. The model then toggles a field parity per
+// field (encoded in the pixel data for +DRES) and the read check also
+// requires the current field's parity, with exactly one halt per field
+// while locked.
 // +WSWITCH=1 / +HSWITCH=1 toggle the 256/320 width or the 224/240 height
 // at a halt (as a vblank register write lands) and back, forgiving the one
 // transition HDMI frame's reads; waits and period stay checked throughout.
