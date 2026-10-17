@@ -30,9 +30,10 @@ fi
 $VLT --binary --timing -j 4 --top-module tb_vdp_lock -Mdir build/obj \
     -Wno-PINMISSING -Wno-IMPLICIT -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-CASEINCOMPLETE -Wno-UNDRIVEN -Wno-COMBDLY -Wno-ALWCOMBORDER \
     $DEFS \
-    /w/sim/vdplock/tb_vdp_lock.v $VDP \
+    /w/tb_vdp_lock.v $VDP \
     $VSRC/common/dpram.v $VSRC/common/dpram_block.v $VSRC/common/dpram32_block.v \
-    $VSCN/hdmi_stub.v $VSRC/framebuffer_sync.sv $VSCN/scanlines.v $VSRC/video_fx.v \
+    $VSCN/hdmi_stub.v $VSRC/framebuffer_sync.sv $VSRC/scanlines.v $VSRC/video_fx.v \
+    -I$VSRC/vdp -I$VSRC/common \
     > build/verilate.log 2>&1 || { tail -40 build/verilate.log; exit 1; }
 run() {
     docker run --rm --name r6smsmd_vdplock_run --user "$(id -u):$(id -g)" -v "$PWD:/w" -w /w --entrypoint ./build/obj/Vtb_vdp_lock verilator/verilator:latest \
