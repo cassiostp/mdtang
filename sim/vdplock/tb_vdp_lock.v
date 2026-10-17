@@ -36,14 +36,19 @@ module tb_vdp_lock;
     wire [15:0] dobus;
     wire dtack_n;
 
-    // ---- VRAM stubs (combinational ack, zero data) -----------------------
+    // ---- VRAM stubs (one-cycle ack, zero data) ---------------------------
     wire vram_req, vram_we, vram_u_n, vram_l_n, vram32_req;
+    reg vram_ack_r = 0, vram32_ack_r = 0;
     wire vram_ack, vram32_ack;
     wire [15:1] vram_a, vram32_a;
     wire [15:0] vram_d;
     wire [31:0] vram32_q = 0;
-    assign vram_ack = vram_req;
-    assign vram32_ack = vram32_req;
+    assign vram_ack = vram_ack_r;
+    assign vram32_ack = vram32_ack_r;
+    always @(posedge clk_sys) begin
+        vram_ack_r <= vram_req;
+        vram32_ack_r <= vram32_req;
+    end
 
     // ---- VBUS stubs ------------------------------------------------------
     wire [23:1] vbus_addr;
