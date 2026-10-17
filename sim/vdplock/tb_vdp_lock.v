@@ -18,13 +18,14 @@ module tb_vdp_lock;
     always #9.286 clk_sys = ~clk_sys;              // 53.846 MHz
     always #6.734 clk_pixel = ~clk_pixel;          // 74.25 MHz
 
-    integer ilace = 0, dres = 0, pal_i = 0, v30 = 0, nogate = 0;
+    integer ilace = 0, dres = 0, pal_i = 0, v30 = 0, nogate = 0, nf = 8;
     initial begin
         if ($value$plusargs("ILACE=%d", ilace)) ;
         if ($value$plusargs("DRES=%d", dres)) ;
         if ($value$plusargs("PAL=%d", pal_i)) ;
         if ($value$plusargs("V30=%d", v30)) ;
         if ($value$plusargs("NOGATE=%d", nogate)) ;
+        if ($value$plusargs("NF=%d", nf)) ;
     end
 
     reg rst_n = 0;
@@ -167,7 +168,7 @@ module tb_vdp_lock;
     // ---- measurement -------------------------------------------------------
     integer field_count = 0;
     integer line_steps = 0;
-    integer field_lines[0:15];
+    integer field_lines[0:63];
     reg [8:0] vcnt_prev = 0;
     reg field_prev = 0;
     realtime t_first = 0, t_last = 0;
@@ -185,7 +186,7 @@ module tb_vdp_lock;
             if (dut.HV_VCNT !== vcnt_prev)
                 line_steps = line_steps + 1;
             if (dut.FIELD !== field_prev) begin
-                if (field_count < 16)
+                if (field_count < 64)
                     field_lines[field_count] = line_steps;
                 if (field_count == 0)
                     t_first = $realtime;
@@ -196,11 +197,17 @@ module tb_vdp_lock;
             if (pause_core && !pause_prev) begin
                 halts = halts + 1;
                 paused_at = $realtime;
+                if (halts <= 40)
+                    $display("  halt %0d at %0.3f ms (FIELD=%0d HV_VCNT=%0d)",
+                             halts, $realtime / 1e6, dut.FIELD, dut.HV_VCNT);
             end
             if (!pause_core && pause_prev) begin
                 wait_sum = wait_sum + ($realtime - paused_at);
                 if ($realtime - paused_at > wait_max)
                     wait_max = $realtime - paused_at;
+                if (halts <= 40)
+                    $display("  release %0d after %0.1f us",
+                             halts, ($realtime - paused_at) / 1000.0);
             end
             pause_prev = pause_core;
         end
@@ -227,11 +234,11 @@ module tb_vdp_lock;
         ce = 1;
         reg_write(5'd1, 8'h44 | (v30 != 0 ? 8'h08 : 8'h00));
         reg_write(5'd12, (dres != 0) ? 8'h06 : (ilace != 0) ? 8'h02 : 8'h00);
-        // settle one field, measure the next 8, then report
-        wait (field_count >= 9);
-        $display("VDPLOCK pal=%0d ilace=%0d dres=%0d v30=%0d nogate=%0d:",
-                 pal_i, ilace, dres, v30, nogate);
-        for (i = 1; i < 9; i = i + 1) begin
+        // settle one field, measure the next nf, then report
+        wait (field_count >= nf + 1);
+        $display("VDPLOCK pal=%0d ilace=%0d dres=%0d v30=%0d nogate=%0d nf=%0d:",
+                 pal_i, ilace, dres, v30, nogate, nf);
+        for (i = 1; i <= nf; i = i + 1) begin
             $display("  field %0d: %0d lines (want %0d)", i, field_lines[i],
                      want_lines(i));
             if (field_lines[i] !== want_lines(i)) begin
