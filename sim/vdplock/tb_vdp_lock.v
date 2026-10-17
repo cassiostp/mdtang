@@ -66,7 +66,6 @@ module tb_vdp_lock;
 `else
     wire interlace_any;
 `endif
-    wire hbl_sig, vbl_sig;
     reg ce = 0;
 
     vdp dut (
@@ -87,7 +86,7 @@ module tb_vdp_lock;
         .INTERLACE_ANY(interlace_any),
 `endif
         .RESOLUTION(resolution),
-        .HBL(hbl_sig), .VBL(vbl_sig),
+        .HBL(hblank), .VBL(vblank),
         .R(r), .G(g), .B(b), .HS(hsync), .VS(vsync),
         .SVP_QUIRK(1'b0), .VRAM_SPEED(1'b0), .VSCROLL_BUG(1'b0),
         .BORDER_EN(1'b0), .CRAM_DOTS(1'b0), .OBJ_LIMIT_HIGH_EN(1'b0),
@@ -179,6 +178,7 @@ module tb_vdp_lock;
     realtime wait_max = 0;
     integer i;
     integer fails = 0;
+    integer paused_clks = 0, total_clks = 0;
 
     always @(posedge clk_sys) begin
         if (rst_n && ce) begin
@@ -208,6 +208,14 @@ module tb_vdp_lock;
         field_prev = dut.FIELD;
     end
 
+    always @(posedge clk_sys) begin
+        if (rst_n) begin
+            total_clks = total_clks + 1;
+            if (!ce)
+                paused_clks = paused_clks + 1;
+        end
+    end
+
     initial begin
         #1;
         // reset, then program R1 (M5 + display + V30?) and R12 (H32 + LSM)
@@ -231,9 +239,10 @@ module tb_vdp_lock;
                 fails = fails + 1;
             end
         end
-        $display("  halts: %0d in %0d fields, wait avg %0.1f us max %0.1f us",
+        $display("  halts: %0d in %0d fields, wait avg %0.1f us max %0.1f us, core paused %0.2f%%",
                  halts, field_count - 1,
-                 (wait_sum / 1000.0) / (halts == 0 ? 1 : halts), wait_max / 1000.0);
+                 (wait_sum / 1000.0) / (halts == 0 ? 1 : halts), wait_max / 1000.0,
+                 100.0 * paused_clks / (total_clks == 0 ? 1 : total_clks));
         $display("  game rate: %0.3f fields/s over %0.3f ms",
                  1e9 * (field_count - 1) / (t_last - t_first),
                  (t_last - t_first) / 1e6);

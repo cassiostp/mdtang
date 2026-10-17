@@ -2058,8 +2058,8 @@ module vdp(
    // both cases. Progressive modes are untouched. The average field rate is
    // then the hardware's: 59.81 Hz NTSC, 50.24 Hz PAL.
    assign V_TOTAL_HEIGHT = ((PAL) ? PAL_LINES : NTSC_LINES)
-                         + (LSM[0] & FIELD)            // odd interlaced field: +1 line
-                         - (PAL & LSM[0] & ~FIELD);    // even PAL interlaced field: -1 line
+                         + (LSM[0] & FIELD)    // odd interlaced field: +1 line
+                         - (PAL & LSM[0]);     // PAL interlaced: even field is 312, not 313
    assign V_INT_POS     = (V30) ? V_INT_V30 : V_INT_V28;
    
    // COUNTERS AND INTERRUPTS
