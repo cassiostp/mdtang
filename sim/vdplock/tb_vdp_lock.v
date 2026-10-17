@@ -117,6 +117,7 @@ module tb_vdp_lock;
 
     // ---- the real scaler --------------------------------------------------
     wire pause_core;
+    wire [7:0] ovx, ovy;
     wire [2:0] tmds_d_p, tmds_d_n;
     wire tmds_clk_p, tmds_clk_n;
     reg [15:0] aud = 0;
@@ -128,7 +129,7 @@ module tb_vdp_lock;
         .width(resolution[0] ? 320 : 256), .height(resolution[1] ? 240 : 224),
         .pause_core(pause_core),
         .std_timing(1'b0),
-        .overlay(1'b0), .overlay_x(8'd0), .overlay_y(8'd0), .overlay_color(15'd0),
+        .overlay(1'b0), .overlay_x(ovx), .overlay_y(ovy), .overlay_color(15'd0),
         .scanlines(1'b0), .sl_darkness(2'd0), .sl_thick(1'b0), .sl_out(1'b0),
         .video_config(32'd0),
         .audio_left(aud), .audio_right(aud),
