@@ -1,4 +1,5 @@
-// Console 60K timing constraints: src/mdtang.sdc plus two cuts below.
+// Console 60K timing constraints: src/mdtang.sdc plus five cuts below (two
+// M68K->Z80 synchronisers + three Z80->M68K handshake cuts).
 // Gowin reads one SDC per project, so this file repeats mdtang.sdc; keep
 // the two in sync.
 
@@ -29,3 +30,10 @@ set_multicycle_path 3 -end -hold -from [get_clocks {clk_z80}] -to [get_clocks {c
 // the 138K meets them and keeps the check (src/mdtang.sdc).
 set_false_path -from [get_pins {megadrive/z80_busrq_n*/Q}] -to [get_pins {megadrive/Z80_BUSRQ_N*/D}]
 set_false_path -from [get_pins {megadrive/z80_reset_n*/Q}] -to [get_pins {megadrive/Z80_RESET_N*/D}]
+
+# Z80 -> M68K bus handshake (CLK_Z80 to MCLK): same three cuts as mdtang.sdc.
+# See mdtang.sdc for the handshake argument (system.sv MBUS_IDLE/ZBUS_IDLE,
+# CEN divides to ~3.58 MHz, coincident-edge hold benign).
+set_false_path -from [get_pins {megadrive/Z80/u0/DO_*/Q}] -to [get_pins {megadrive/MBUS_DO_*/D}]
+set_false_path -from [get_pins {megadrive/Z80/u0/DO_*/Q}] -to [get_pins {megadrive/ZBUS_DO_*/D}]
+set_false_path -from [get_pins {megadrive/Z80_RESET_N*/Q}] -to [get_pins {megadrive/MBUS_ZBUS_D*/*}]
