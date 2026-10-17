@@ -20,3 +20,15 @@ set_multicycle_path 3 -end -hold -from [get_clocks {clk_z80}] -to [get_clocks {c
 //set_multicycle_path 4 -start -setup -from [get_pins {megadrive/M68K/excUnit/alu/oper*/*}] -to [get_pins {megadrive/M68K/excUnit/alu/pswCcr*/*}]
 //set_multicycle_path 3 -start -hold -from [get_pins {megadrive/M68K/excUnit/alu/oper*/*}] -to [get_pins {megadrive/M68K/excUnit/alu/pswCcr*/*}]
 
+# Z80 -> M68K bus handshake (CLK_Z80 to MCLK).
+# Z80_DO changes together with Z80_IO on the same CLK_Z80 CEN edge (T80s
+# src/system.sv:1406-1422, CEN src/system.sv:221-254 divides to ~3.58 MHz,
+# stable >=15 MCLKs); the MBUS/ZBUS FSMs handshake via DTACK
+# (Z80_MBUS_DTACK_N/Z80_ZBUS_DTACK_N, MBUS_IDLE src/system.sv:1028, ZBUS_IDLE
+# src/system.sv:1546-1555) and require a gap (~Z80_IO) to clear DTACK, so the
+# coincident-edge (0 ns) hold check is benign. Placement moves this cone
+# ~0.5 ns (std60 round5 fails hold by 0.21 ns on DO->MBUS_DO/ZBUS_DO, native
+# passes), so cut it like the forward synchronisers (console60k.sdc).
+set_false_path -from [get_pins {megadrive/Z80/u0/DO_*/Q}] -to [get_pins {megadrive/MBUS_DO_*/D}]
+set_false_path -from [get_pins {megadrive/Z80/u0/DO_*/Q}] -to [get_pins {megadrive/ZBUS_DO_*/D}]
+set_false_path -from [get_pins {megadrive/Z80_RESET_N*/Q}] -to [get_pins {megadrive/MBUS_ZBUS_D*/*}]
