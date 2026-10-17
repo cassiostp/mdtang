@@ -166,7 +166,11 @@ add_file -type verilog "src/vdp/vram.v"
 
 set_option -synthesis_tool gowinsynthesis
 set_option -top_module mdtang_top
-set_option -include_path {"src/common" "src/variant/$variant"}
+# Gowin takes a single include path per set_option call; the variant header
+# lives in its own directory (the src/common entry below is unused: nothing
+# includes from it, vdp_common.v resolves from its own directory).
+set_option -include_path {"src/common"}
+set_option -include_path {"src/variant/$variant"}
 set_option -verilog_std sysv2017
 set_option -vhdl_std vhd2008
 set_option -ireg_in_iob 1
