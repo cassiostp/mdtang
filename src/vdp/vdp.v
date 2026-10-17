@@ -84,6 +84,7 @@ module vdp(
    output reg       CE_PIX,            // pixel valid
    output reg       FIELD_OUT,
    output           INTERLACE,
+   output           INTERLACE_ANY,     // interlace mode 1 or 2: fields alternate 262/263 (NTSC), 312/313 (PAL)
    output [1:0]     RESOLUTION,        // 00 - 256x224, 01 - 256x240, 10 - 320x224, 11 - 320x240
    output reg       HBL,               // HBLANK
    output reg       VBL,               // VBLANK
@@ -2051,7 +2052,14 @@ module vdp(
                           (PAL) ? V_DISP_START_PAL_V28 : 
                           V_DISP_START_NTSC_V28;
    assign V_DISP_HEIGHT = (V30) ? V_DISP_HEIGHT_V30 : V_DISP_HEIGHT_V28;
-   assign V_TOTAL_HEIGHT = (PAL) ? PAL_LINES : NTSC_LINES;
+   // Interlaced fields alternate one line shorter/longer on real hardware
+   // (Nemesis's VDP notes; Genesis Plus GX and the other emulators keep the
+   // flat 262/313 count): NTSC 262/263, PAL 312/313, the odd field longer in
+   // both cases. Progressive modes are untouched. The average field rate is
+   // then the hardware's: 59.81 Hz NTSC, 50.24 Hz PAL.
+   assign V_TOTAL_HEIGHT = ((PAL) ? PAL_LINES : NTSC_LINES)
+                         + (LSM[0] & FIELD)            // odd interlaced field: +1 line
+                         - (PAL & LSM[0] & ~FIELD);    // even PAL interlaced field: -1 line
    assign V_INT_POS     = (V30) ? V_INT_V30 : V_INT_V28;
    
    // COUNTERS AND INTERRUPTS
@@ -2540,6 +2548,7 @@ module vdp(
    assign B = FF_B;
    
    assign INTERLACE = LSM[1] & LSM[0];
+   assign INTERLACE_ANY = LSM[0];
    assign RESOLUTION = {V30, H40};
    
    assign V_DISP_HEIGHT_R = (V30_R) ? V_DISP_HEIGHT_V30 : V_DISP_HEIGHT_V28;

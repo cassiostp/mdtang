@@ -128,6 +128,7 @@ end
 /* verilator public_on */
 reg        md_on;
 wire [1:0] resolution;          // {V30, H40}, V30: verticle 240 vs 224, H40: horizontal 320 vs 256
+wire       interlaced_any;      // interlace mode 1 or 2: fields alternate 262/263 (NTSC), 312/313 (PAL)
 wire ce_pix, hblank, vblank, hsync;
 wire       pause_core;
 wire [31:0] core_config;        // from iosys
@@ -211,7 +212,7 @@ system megadrive (
     .GG_RESET('0), .GG_EN('0), .GG_CODE('0), .GG_AVAILABLE(),
     .BRAM_A(bram_a), .BRAM_DI(bram_di), .BRAM_DO(bram_do), .BRAM_WE(bram_we), .BRAM_CHANGE(sv_core_we),
     .RED(red), .GREEN(green), .BLUE(blue), .VS(), .HS(hsync), .HBL(hblank), .VBL(vblank), .CE_PIX(ce_pix), 
-    .BORDER('0), .CRAM_DOTS('0), .INTERLACE(), .FIELD(), .RESOLUTION(resolution),
+    .BORDER('0), .CRAM_DOTS('0), .INTERLACE(), .INTERLACE_ANY(interlaced_any), .FIELD(), .RESOLUTION(resolution),
     .J3BUT('0), .JOY_1(joy1), .JOY_2(joy2), .JOY_3(), .JOY_4(), .JOY_5(), .MULTITAP('0),
     .MOUSE('0), .MOUSE_OPT('0), .GUN_OPT('0), .GUN_TYPE('0), .GUN_SENSOR('0), .GUN_A('0),
     .GUN_B('0), .GUN_C('0), .GUN_START('0),
@@ -219,7 +220,12 @@ system megadrive (
     .MEM_ADDR(mem_addr), .MEM_DATA(mem_data), .MEM_WDATA(mem_wdata), .MEM_WE(mem_we), .MEM_BE(mem_be),
     .MEM_REQ(mem_req), .MEM_ACK(mem_ack), .ROMSZ({1'b0, loader_addr[23:1]}),
     .EN_HIFI_PCM('0), .LADDER('0), .OBJ_LIMIT_HIGH('0), .TRANSP_DETECT(),
-    .PAUSE_EN(pause_core | pause_menu), .PAUSE_ALL(pause_menu), .BGA_EN('1), .BGB_EN('1), .SPR_EN('1), .DBG_M68K_A(), .DBG_VBUS_A()
+    // Interlaced fields average 262.5 (NTSC) / 312.5 (PAL) lines, so the
+    // longer field outruns the 59.93 Hz HDMI frame: halting every field
+    // would stall a whole frame on alternate fields and run the game at 2/3
+    // speed. Run interlaced modes free like SMS PAL does (smstang_top.sv):
+    // the game then runs at the hardware-exact field rate.
+    .PAUSE_EN((pause_core & ~interlaced_any) | pause_menu), .PAUSE_ALL(pause_menu), .BGA_EN('1), .BGB_EN('1), .SPR_EN('1), .DBG_M68K_A(), .DBG_VBUS_A()
 );
 
 
