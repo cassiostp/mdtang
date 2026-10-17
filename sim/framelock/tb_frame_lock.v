@@ -23,8 +23,12 @@
 // (encoded in the pixel data for +DRES) and the read check also requires
 // the current field's parity, with exactly one halt per field while locked.
 // +WSWITCH=1 / +HSWITCH=1 toggle the 256/320 width or the 224/240 height
-// at a halt (as a vblank register write lands) and back, forgiving the one
-// transition HDMI frame's reads; waits and period stay checked throughout.
+// at a halt (as a vblank register write lands) and back, forgiving the six
+// transition HDMI frames' reads: the full frame buffer keeps showing the
+// pre-switch field until the first post-switch field completes and swaps
+// in, and a height switch moves the pause point ~1 ms, so one release
+// misses its even-frame slot (a single ~15.7 ms halt, then locked again).
+// Waits and period stay checked, with two out-of-band halts allowed.
 // Interlace/switch runs use a short scenario (lock + settled fields); the
 // pause/reset re-lock is covered by the progressive runs.
 `timescale 1ns/1ps
@@ -321,7 +325,13 @@ module tb_frame_lock;
     end
     always @(posedge clk_pixel) begin
         if (checking && !core_reset) begin
-            if (dut.clk_audio && !aud_clk_prev) begin
+            // A pause (frame-sync halt or menu) holds the sample by design;
+            // repeats across a pause are not a stuck sample, so the max-run
+            // check below only counts repeats while the machine runs. Holds
+            // are still checked by aud_change_while_paused above.
+            if (pause_core || menu_pause) begin
+                run = 1;
+            end else if (dut.clk_audio && !aud_clk_prev) begin
                 aud_words = aud_words + 1;
                 if (dut.audio_sample_word[0] === 16'hxxxx || dut.audio_sample_word[0] !== dut.audio_sample_word[0]) begin
                     aud_x = aud_x + 1;
@@ -409,17 +419,24 @@ module tb_frame_lock;
                 if (wswitch) W = (W == 320) ? 256 : 320;
                 if (hswitch) H = (H == 224) ? 240 : 224;
                 $display("mode switch to %0dx%0d at a halt", W, H);
-                forgive = 1; wait_hdmi_frames(1); forgive = 0;
+                // The pre-switch field stays on screen until the first
+                // post-switch field completes and swaps in. After a height
+                // switch the pause point moves ~1 ms, so one release misses
+                // its even-frame slot (a single ~15.7 ms halt, then locked
+                // again); forgive the transition plus five refreshes.
+                // Waits stay checked, with two out-of-band halts allowed
+                // for the two height switches (see the checkpoint below).
+                forgive = 1; wait_hdmi_frames(6); forgive = 0;
                 wait_hdmi_frames(5);
                 while (!pause_core) @(posedge clk);
                 if (wswitch) W = (W == 320) ? 256 : 320;
                 if (hswitch) H = (H == 224) ? 240 : 224;
                 $display("mode switch back to %0dx%0d at a halt", W, H);
-                forgive = 1; wait_hdmi_frames(1); forgive = 0;
+                forgive = 1; wait_hdmi_frames(6); forgive = 0;
                 wait_hdmi_frames(5);
             end
             checking = 0;
-            checkpoint("short-settled", 0, 0);
+            checkpoint("short-settled", 0, hswitch ? 2 : 0);
             if (period_viol != 0) begin $display("FAIL short-settled: %0d bad periods", period_viol); $fatal(1, "tb_frame_lock: FAIL"); end
             if (aud_change_while_paused != 0) begin $display("FAIL short-settled: audio moved while paused"); $fatal(1, "tb_frame_lock: FAIL"); end
             if (aud_x != 0) begin $display("FAIL short-settled: %0d X audio words", aud_x); $fatal(1, "tb_frame_lock: FAIL"); end
