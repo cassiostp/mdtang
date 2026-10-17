@@ -4,5 +4,3 @@ md_fx*.log
 out_*.txt
 build/
 __pycache__/
-md_smooth_*.log
-md_src_*.hex

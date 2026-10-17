@@ -6,5 +6,5 @@ set -e
 RTL=../../src
 iverilog -g2012 -o tb_scanlines.out tb_scanlines.v $RTL/scanlines.v
 vvp tb_scanlines.out
-iverilog -g2012 -o tb_md_scaler.out tb_md_scaler.v hdmi_stub.v $RTL/framebuffer_sync.sv $RTL/scanlines.v $RTL/video_fx.v $RTL/smooth.v
+iverilog -g2012 -o tb_md_scaler.out tb_md_scaler.v hdmi_stub.v $RTL/framebuffer_sync.sv $RTL/scanlines.v $RTL/video_fx.v
 vvp tb_md_scaler.out

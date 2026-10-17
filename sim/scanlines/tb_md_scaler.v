@@ -76,6 +76,7 @@ module tb_md_scaler;
 
     reg by_column = 0;
     // the source line an output row shows in the current mode, -1 for a border row
+    // (Scale Integer centres the picture with a border even with scanlines off)
     reg cur_geom;
     function integer exp_line(input integer row);
         begin
@@ -147,7 +148,7 @@ module tb_md_scaler;
 
     task check_rows(input on, input out, input thick, input [1:0] dk, input over);
         begin
-            is_geom = on & ~out & ~over;
+            is_geom = ~out & ~over;             // Scale Integer: integer geometry even with scanlines off
             nd = thick ? 2 : 1;
             XP = 640;
             ptop = is_geom ? (720 - R * H) / 2 : 0;
@@ -160,7 +161,7 @@ module tb_md_scaler;
                     want = BORDER;
                 else begin
                     want = to_rgb(src_color(line));
-                    if (is_geom ? ((row - ptop) % R >= R - nd) : (on & out & ((row % R) >= R - nd)))
+                    if (on & (is_geom ? ((row - ptop) % R >= R - nd) : (out & ((row % R) >= R - nd))))
                         want = darken(want, dk);
                 end
                 if (got !== want) fail("picture", row, got, want);
@@ -218,7 +219,7 @@ module tb_md_scaler;
     task run(input on, input out, input thick, input [1:0] dk, input over);
         begin
             sl_on = on; sl_out = out; sl_thick = thick; sl_dark = dk; ov = over;
-            cur_geom = on & ~out & ~over;
+            cur_geom = ~out & ~over;
             settle;
             check_rows(on, out, thick, dk, over);
             $display("framebuffer %0dx%0d on=%b out=%b thick=%b darkness=%0d overlay=%b: ok", W, H, on, out, thick, dk, over);
@@ -228,9 +229,9 @@ module tb_md_scaler;
     task columns(input on, input out);
         begin
             sl_on = on; sl_out = out; ov = 0;
-            cur_geom = on & ~out;
+            cur_geom = ~out;
             settle;
-            check_columns(on & ~out);
+            check_columns(~out);
             $display("framebuffer %0dx%0d columns on=%b out=%b: ok", W, H, on, out);
         end
     endtask
@@ -240,7 +241,8 @@ module tb_md_scaler;
         #1;
         // 256x224, the Mega Drive's usual frame: the vertical geometry and the darkening
         W = 256; H = 224;
-        run(0, 0, 0, 2, 0);                     // off: the old geometry
+        run(0, 0, 0, 2, 0);                     // Integer scale, scanlines off: integer geometry, no darkening
+        run(0, 1, 0, 2, 0);                     // Full scale, scanlines off: full geometry, no darkening
         run(1, 0, 0, 2, 0);                     // the default: integer, thin, 75 %
         run(1, 0, 1, 0, 0);
         run(1, 0, 0, 1, 0);
@@ -253,25 +255,29 @@ module tb_md_scaler;
         // the other frame sizes
         W = 320; H = 224;
         run(0, 0, 0, 2, 0);
+        run(0, 1, 0, 2, 0);
         run(1, 0, 0, 2, 0);
         run(1, 0, 1, 3, 0);
         run(1, 1, 0, 1, 0);
         W = 320; H = 240;                       // 240 lines are exactly 3 rows each, no border
         run(0, 0, 0, 2, 0);
+        run(0, 1, 0, 2, 0);
         run(1, 0, 0, 2, 0);
         run(1, 0, 1, 1, 0);
         run(1, 1, 0, 2, 0);
         W = 256; H = 240;
+        run(0, 0, 0, 2, 0);
+        run(0, 1, 0, 2, 0);
         run(1, 0, 1, 2, 0);
         // by column: the horizontal geometry
         by_column = 1;
         load_columns;
         W = 256; H = 224;
-        columns(0, 0); columns(1, 0); columns(1, 1);
+        columns(0, 0); columns(0, 1); columns(1, 0); columns(1, 1);
         W = 320; H = 224;
-        columns(0, 0); columns(1, 0);
+        columns(0, 0); columns(0, 1); columns(1, 0);
         W = 320; H = 240;
-        columns(0, 0); columns(1, 0);
+        columns(0, 0); columns(0, 1); columns(1, 0);
         $display("tb_md_scaler: PASS");
         $finish;
     end

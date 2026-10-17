@@ -1,8 +1,11 @@
-// framebuffer (framebuffer_sync.sv, with smoothing) against the scaler it was built from (the
-// baseline, built from the git history by prep.sh as framebuffer_fx): with video_config[19:18]
-// clear (0, or the reserved 3) the rgb stream into the hdmi module must be the very same, clock for
-// clock, in every scanline mode, with the other filters on or off and the menu overlay up or not;
-// and with the overlay up the same holds in every smoothing mode, the overlay is never smoothed.
+// framebuffer (framebuffer_sync.sv) against the scaler it was built from (the
+// baseline, built from the git history by prep.sh as framebuffer_fx): with the removed
+// smoothing bits (video_config[19:18]) clear or set (0, or the reserved 3) the rgb stream
+// into the hdmi module must be the very same, clock for clock, in every scanline mode,
+// with the other filters on or off and the menu overlay up or not; scanlines-off runs in
+// Full scale (Scale Integer recentres the picture even with scanlines off, which the
+// baseline predates). With the overlay up
+// the same holds whatever the removed bits say, the overlay is never smoothed.
 // Both get the same video_config (the baseline ignores bits 19:18). hdmi_first_line, the row where
 // the core is released, is compared too. One simulation is one frame size, +W=256|320 +H=224|240
 // (run.sh runs the four).
@@ -130,27 +133,26 @@ module tb_md_smooth_regress;
     endtask
 
     localparam [31:0] OFF = 32'h0000_0000, FW_OFF = 32'h0001_2000, RSVD = 32'h000C_0000;
-    localparam [31:0] SHARP = 32'h0004_0000, SOFT = 32'h0008_0000;
     // colour, a slot mask and a grid bit the Mega Drive ignores
     localparam [31:0] FXW = 32'h0001_A000 | 3'd2 | (3'd5 << 3) | (3'd1 << 6) | (2'd1 << 9) | (2'd2 << 11) | (2'd2 << 13);
 
     initial begin
         // the first frame runs the pipelines empty; the settings are applied in its blanking
         wait_row730;
-        variant(0, 0, 0, 2, 0, OFF);
-        variant(0, 0, 0, 2, 0, FW_OFF);
-        variant(0, 0, 0, 2, 0, RSVD);           // reserved: off
-        variant(0, 0, 0, 0, 0, FXW);
-        variant(0, 0, 0, 0, 0, FXW | RSVD);
+        variant(0, 1, 0, 2, 0, OFF);            // scanlines off, Full scale: the baseline's geometry
+        variant(0, 1, 0, 2, 0, FW_OFF);
+        variant(0, 1, 0, 2, 0, RSVD);           // reserved: off
+        variant(0, 1, 0, 0, 0, FXW);
+        variant(0, 1, 0, 0, 0, FXW | RSVD);
         variant(1, 0, 0, 2, 0, OFF);            // integer scale, thin
         variant(1, 0, 1, 0, 0, FW_OFF | RSVD);  // thick, 25 %
         variant(1, 0, 0, 1, 0, FXW);
         variant(1, 0, 1, 3, 0, FXW | RSVD);     // 100 %
         variant(1, 1, 0, 2, 0, OFF);            // output rows
         variant(1, 1, 1, 1, 0, FXW | RSVD);
-        variant(0, 0, 0, 2, 1, SHARP);          // menu overlay up: never smoothed
-        variant(1, 0, 0, 2, 1, SOFT | FXW);
-        variant(1, 1, 1, 2, 1, SHARP | FW_OFF);
+        variant(0, 0, 0, 2, 1, OFF);            // menu overlay up
+        variant(1, 0, 0, 2, 1, FXW);
+        variant(1, 1, 1, 2, 1, FW_OFF);
         variant(0, 0, 0, 2, 1, RSVD);
         variant(1, 0, 1, 2, 0, FW_OFF);         // and back
         $display("tb_md_smooth_regress %0dx%0d: %0d pixels identical to the baseline (%0d picture)", W, H, total_cmp, total_pic);
