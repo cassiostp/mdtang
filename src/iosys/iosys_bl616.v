@@ -99,6 +99,7 @@ assign rom_loading = rom_loading_reg;
 // UART receiver signals
 wire [7:0] rx_data;
 wire rx_valid;
+wire rx_eop;   // receiver saw a multi-bit-time gap: end of packet
 
 // UART transmitter signals
 reg [7:0] tx_data;
@@ -120,7 +121,8 @@ async_receiver #(
     .clk(clk),
     .RxD(uart_rx_rr),
     .RxD_data(rx_data),
-    .RxD_data_ready(rx_valid)
+    .RxD_data_ready(rx_valid),
+    .RxD_endofpacket(rx_eop)
 );
 
 async_transmitter #(
@@ -145,22 +147,14 @@ localparam RECV_RESPONSE_REQ = 7'b0100000; // post a response request to TX
 reg [6:0] recv_state = RECV_IDLE;
 // Inter-byte timeout: a frame's bytes arrive back to back at 2 Mbaud
 // (~5 us apart, streamed from the MCU's TX FIFO inside one critical
-// section), so a millisecond without a byte mid-frame means the
-// stream desynced -- a byte dropped or flipped on the wire, or raw
+// section), so any multi-bit-time gap between bytes mid-frame means
+// the stream desynced -- a byte dropped or flipped on the wire, or raw
 // bytes spliced in -- and the length being counted down is garbage.
-// Abandon the partial frame (the same resync the firmware's parser does on its side)
-// instead of swallowing core-ID polls as parameters for up to 2047
+// Abandon the partial frame (the same resync the firmware's parser
+// does on its side) instead of swallowing core-ID polls as parameters for up to 2047
 // bytes, which at the in-game poll rate deafens the link for minutes.
-// The counter sits in its own block so the receiver's control set is
-// untouched; the state machine only tests its top bit.
-reg [14:0] rx_gap = 0;
-always @(posedge clk) begin
-    if (!resetn || rx_valid || recv_state == RECV_IDLE)
-        rx_gap <= 0;
-    else if (!rx_gap[14])
-        rx_gap <= rx_gap + 1'd1;
-end
-wire rx_timeout = rx_gap[14];
+// The gap detector is the UART receiver's own end-of-packet pulse
+// (a few bit times of line idle): no counter is added here.
 
 
 // UART command buffer
@@ -394,7 +388,8 @@ always @(posedge clk) begin
         sv_we_b <= 0;
         sv_wr_stb <= 0;
 
-        if (rx_timeout && !rx_valid)
+        if (rx_eop && recv_state != RECV_IDLE &&
+                recv_state != RECV_RESPONSE_REQ)
             recv_state <= RECV_IDLE;   // desynced partial frame: drop it
         case (recv_state)
 
