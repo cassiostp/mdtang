@@ -27,6 +27,27 @@ gh workflow run cores.yml -R cassiostp/tangcore --ref ci/core-builds -f core=mdt
 
 Fails on any setup/hold violation. `place_option 2` (slower but timing-optimised) is set in `build.tcl`.
 
+## Build variants (standard / hz120)
+
+One source tree builds both bitstreams, picked at build time by `TANGCORE_VARIANT`:
+
+```sh
+gw_sh build.tcl console138k                        # standard 720p build (also when unset/empty)
+TANGCORE_VARIANT=hz120 gw_sh build.tcl console138k # 480p 120 Hz build
+```
+
+Unset, empty or `standard` is the normal build; `hz120` is the 480p120 build (console138k only, anything else is an error); anything else stops with an error. `build.tcl` prints `TangCore variant: <name>` so it shows in the build log, and adds `src/variant/<variant>` to the include path: the files that differ (`framebuffer_sync.sv`, `hdmi.sv`, `textdisp.v`, the two `pll_74.v`) do `` `include "variant.vh" ``, which defines `HZ120` for hz120 and nothing for standard. The standard variant is the unmodified build; every 120 Hz difference is inside `` `ifdef HZ120 ``. CI:
+
+```sh
+gh workflow run cores.yml -R cassiostp/tangcore --ref ci/core-builds \
+  -f core=mdtang -f ref=<branch> -f board=console138k -f variant=hz120
+```
+
+The hz120 bitstream is saved as `mdtang_120hz.bin` (artifact `mdtang-console138k-hz120);
+the standard one stays `mdtang.bin`. The 120 Hz double frame buffer costs ~108 BSRAM
+blocks over the standard build (feature/hz120 measured 89 to 197 on 138K), so hz120
+is 138K-only: the 60K has 118 blocks.
+
 ## Clocks and constraints
 
 - Both SDCs: `clk50` 50 MHz, `clk_sys` ~53.85 MHz (`pll.v`), `clk_z80 = clk_sys/2`, plus a 4/3 `z80 -> sys` multicycle. HDMI `hclk/hclk5` (74.25/371.25 MHz from `pll_74` via 27 MHz `pll_27`) and USB `clk12` (`pll_12`) are generated in `mdtang_top.sv` but have no SDC entries.
@@ -54,6 +75,8 @@ The scaler asserts `pause_core` when input reaches line 0 (`sync_y` 1/2, +1 with
 - `scanlines`: `scanlines.v` geometry/darkening plus whole-frame scaler-vs-model with release row.
 - `tmds`: 2-stage `tmds_channel` vs the pre-split version over HDMI sequences.
 - `video_fx`: `0x13`, `video_fx` vs `model.py`, regress-vs-git-history with filters off, FX/smoothing/sync checks.
+
+Each `sim/*` bench with a `run.sh` takes `[standard|hz120]` (default both; `scanlines`, `framelock`, `video_fx`). The video benches compile the scaler with `-DHZ120 -I ../../src/variant/hz120` for the hz120 variant and the standard include without the define for standard. `saveram` and `cosim` always use the standard include.
 
 ## Traps
 

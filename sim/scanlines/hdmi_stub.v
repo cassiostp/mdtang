@@ -11,12 +11,9 @@ module hdmi #(
     parameter AUDIO_BIT_WIDTH = 16,
     parameter START_X = 0,
     parameter START_Y = 0,
-    // Native console frame rate: when std_timing is 1 the 720p mode (VIC 4)
-    // uses the standard 1650 x 750 timing; when 0 it uses
-    // NATIVE_FRAME_WIDTH x 750, a line a few pixels longer or shorter that
-    // runs the HDMI output at the console's own refresh rate. Only the line
-    // length changes; the sync pulse start/size and polarity stay the 720p
-    // values. All other VIC modes are untouched.
+    // Native console frame rate: when std_timing is 1, VIC 4 counts 1650 and
+    // VIC 48/49 count 858; when 0 they count NATIVE_FRAME_WIDTH. Vertical
+    // total is 750 (720p) or 525 (480p120).
     parameter int NATIVE_FRAME_WIDTH = 1650
 ) (
     // 1: standard 720p timing; 0: native console rate (NATIVE_FRAME_WIDTH)
@@ -34,15 +31,18 @@ module hdmi #(
     output [10:0] frame_width,
     output [9:0]  frame_height
 );
-    wire [10:0] frame_w = std_timing ? 11'd1650 : NATIVE_FRAME_WIDTH[10:0];
+    wire p480 = (VIDEO_ID_CODE == 48 || VIDEO_ID_CODE == 49);
+    wire [10:0] frame_w = p480 ? (std_timing ? 11'd858 : NATIVE_FRAME_WIDTH[10:0])
+                               : (std_timing ? 11'd1650 : NATIVE_FRAME_WIDTH[10:0]);
+    wire [9:0] frame_h = p480 ? 10'd525 : 10'd750;
     assign frame_width = frame_w;
-    assign frame_height = 750;
+    assign frame_height = frame_h;
     assign tmds = 3'b0;
     assign tmds_clock = 1'b0;
     always @(posedge clk_pixel) begin
         cx <= (cx == frame_w - 11'd1) ? 11'd0 : cx + 11'd1;
         if (cx == frame_w - 11'd1)
-            cy <= (cy == 10'd749) ? 10'd0 : cy + 10'd1;
+            cy <= (cy == frame_h - 10'd1) ? 10'd0 : cy + 10'd1;
     end
 endmodule
 

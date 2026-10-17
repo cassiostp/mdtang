@@ -7,6 +7,7 @@
 //Device Version: B
 //Created Time: Thu Jul 11 06:24:34 2024
 
+`include "variant.vh"
 module pll_74 (clkout0, clkout1, clkin);
 
 output clkout0;
@@ -87,7 +88,11 @@ defparam PLL_inst.ODIV3_SEL = 8;
 defparam PLL_inst.ODIV4_SEL = 8;
 defparam PLL_inst.ODIV5_SEL = 8;
 defparam PLL_inst.ODIV6_SEL = 8;
+`ifdef HZ120
+defparam PLL_inst.MDIV_SEL = 40;    // 480p120: 27 MHz x 40 / 20 = 54 MHz pixel, / 4 = 270 MHz x5 (VCO 1080 MHz)
+`else
 defparam PLL_inst.MDIV_SEL = 55;
+`endif
 defparam PLL_inst.MDIV_FRAC_SEL = 0;
 defparam PLL_inst.ODIV0_FRAC_SEL = 0;
 defparam PLL_inst.CLKOUT0_EN = "TRUE";

@@ -1,6 +1,7 @@
 // 32x28 text display in 8x8 font, with a picorv32 register I/O interface
 // to print characters to the display.
 
+`include "variant.vh"
 module textdisp(
 	input             clk,              // main logic clock
     input             hclk,             // hdmi clock
@@ -50,6 +51,13 @@ wire [6:0] text_char = reg_char_di[6:0];
 // $000-$37F: Character buffer RAM (32*28)
 // $380-$3FF: Logo ROM (14*9 bytes)
 // $400-$800: Font ROM
+`ifdef SIM
+// iverilog model of gowin_dpb_menu for the font bench (sim/scanlines/tb_font_xoff.v)
+reg [7:0] sim_mem [0:2047];
+integer sim_i;
+initial for (sim_i = 0; sim_i < 2048; sim_i = sim_i + 1) sim_mem[sim_i] = 8'd0;
+always @(posedge hclk) mem_do_b <= sim_mem[mem_addr_b];
+`else
 gowin_dpb_menu menu_mem (
     .clka(clk), .reseta(1'b0), .ocea(), .cea(1'b1), 
     .ada({1'b0, text_y, text_x}), .wrea(reg_char_we[0] && cmd == 2'd0),
@@ -59,9 +67,13 @@ gowin_dpb_menu menu_mem (
     .adb(mem_addr_b), .wreb(1'b0), 
     .dinb(), .doutb(mem_do_b)
 );
+`endif
 
 reg [6:0] logo_addr;
 reg [2:0] logo_xoff;
+`ifdef HZ120
+reg [2:0] font_xoff;
+`endif
 reg logo_active;
 reg [14:0] color_buf;
 reg [7:0] x_r;
@@ -83,8 +95,16 @@ always @* begin             // address and output logic
         mem_addr_b = {1'b0, y[7:3], x[7:3]};
         if (logo_active)
             color = mem_do_b[logo_xoff] ? COLOR_LOGO : COLOR_BACK;
+`ifdef HZ120
+        else
+            // Latched bit offset, not the live x: at 480p each overlay pixel
+            // holds for only 2 HDMI clocks, so x has already advanced when
+            // its font byte arrives.
+            color = mem_do_b[font_xoff] ? (is_cursor ? COLOR_CURSOR : COLOR_TEXT) : COLOR_BACK;
+`else
         else
             color = mem_do_b[x[2:0]] ? (is_cursor ? COLOR_CURSOR : COLOR_TEXT) : COLOR_BACK;
+`endif
     end
     default: mem_addr_b = 0;
     endcase
@@ -112,6 +132,9 @@ always @(posedge hclk) begin    // actual state machine
         logo_y = y - LOGO_Y;
         logo_addr <= {logo_y, 3'b0} + logo_y + logo_x[6:3];
         logo_xoff <= logo_x[2:0];
+`ifdef HZ120
+        font_xoff <= x[2:0];
+`endif
         is_cursor <= x[7:3] == 0;
     end
 

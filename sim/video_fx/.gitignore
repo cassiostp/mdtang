@@ -2,5 +2,6 @@
 vec_*.hex
 md_fx*.log
 out_*.txt
+log_*.txt
 build/
 __pycache__/

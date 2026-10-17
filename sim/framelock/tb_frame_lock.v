@@ -1,18 +1,21 @@
 // Frame lock at the native Genesis rate (sim/framelock).
-// Real framebuffer_sync.sv (with the 1652-clock native HDMI line) against a
-// VDP-side model with the real timing: a line is 3420 clk cycles (320 or 256
-// active pixels of 8 or 10 clk, then the blanking), 262 lines per frame, the
-// x / y counters and the write enable are those of mdtang_top.sv, and the
-// core stops while pause_core is set. One simulation is one frame size,
-// +W=256|320 +H=224|240.
+// Real framebuffer_sync.sv against a VDP-side model with the real timing: a
+// line is 3420 clk cycles (320 or 256 active pixels of 8 or 10 clk, then the
+// blanking), 262 lines per frame, the x / y counters and the write enable are
+// those of mdtang_top.sv, and the core stops while pause_core is set. One
+// simulation is one frame size, +W=256|320 +H=224|240.
+// Standard variant: the 1652-clock native HDMI line (59.9274 Hz); hz120
+// variant (-DHZ120): the 858-clock 480p120 line (119.8801 Hz, game 59.9401 Hz).
 // Checks:
-//  - the locked HDMI frame is exactly 1652x750 pixel clocks (the native
-//    59.9274 Hz rate), stable across the run;
+//  - the locked HDMI frame is exactly one native line x 750 (standard) or
+//    858x525 (hz120) pixel clocks, stable across the run;
 //  - the core waits at the sync point every frame (steady wait band) and
 //    re-locks within 2 frames of a menu pause and a core reset;
 //  - every line-buffer read of the picture finds its pixel written in this
 //    frame (no tearing): the single read per source column must land after
-//    the VDP wrote the line and before it is overwritten;
+//    the VDP wrote the line and before it is overwritten (hz120: the bank on
+//    screen is a finished field, so one frame id and one field parity per
+//    refresh means the two banks are not mixed);
 //  - the audio sample holds while the core is paused (the frame-sync halt
 //    must hold, never inject silence) and advances otherwise, with a small
 //    max repeat at the HDMI audio clock.
@@ -24,20 +27,30 @@
 // (encoded in the pixel data for +DRES) and the read check also requires
 // the current field's parity, with exactly one halt per field while locked.
 // +WSWITCH=1 / +HSWITCH=1 toggle the 256/320 width or the 224/240 height
-// at a halt (as a vblank register write lands) and back, forgiving the one
-// transition HDMI frame's reads; waits and period stay checked throughout.
+// at a halt (as a vblank register write lands) and back, forgiving the
+// transition HDMI frames' reads (hz120: six, the full frame buffer keeps
+// showing the pre-switch field until the first post-switch field completes;
+// a height switch moves the pause point ~1 ms, so one release misses its
+// even-frame slot); waits and period stay checked throughout (hz120 allows
+// two out-of-band halts on height-switch runs).
 // Interlace/switch runs use a short scenario (lock + settled fields); the
 // pause/reset re-lock is covered by the progressive runs.
+// +SL_OUT=1 runs the scaler at Full scale (standard default: Full only for
+// height switches, whose Integer picture top moves; hz120 default: Integer).
 `timescale 1ns/1ps
 
 module tb_frame_lock;
 
     reg clk_pixel = 0, clk = 0;
+`ifdef HZ120
+    always #9.259 clk_pixel = ~clk_pixel;       // 54 MHz (480p120)
+`else
     always #6.734 clk_pixel = ~clk_pixel;       // 74.25 MHz
+`endif
     always #9.286 clk = ~clk;                   // 53.846 MHz (50 x 28 / 26)
 
     integer w_arg, h_arg;
-    integer ilace = 0, dres = 0, wswitch = 0, hswitch = 0;
+    integer ilace = 0, dres = 0, wswitch = 0, hswitch = 0, sl_out_arg = -1;
     reg [10:0] W;
     reg  [9:0] H;
     reg  short_mode = 0;
@@ -48,6 +61,7 @@ module tb_frame_lock;
         if (!$value$plusargs("DRES=%d", dres)) dres = 0;
         if (!$value$plusargs("WSWITCH=%d", wswitch)) wswitch = 0;
         if (!$value$plusargs("HSWITCH=%d", hswitch)) hswitch = 0;
+        if (!$value$plusargs("SL_OUT=%d", sl_out_arg)) sl_out_arg = -1;
         W = w_arg; H = h_arg;
         short_mode = (ilace != 0) || (dres != 0) || (wswitch != 0) || (hswitch != 0);
     end
@@ -57,12 +71,18 @@ module tb_frame_lock;
     reg menu_pause = 0;                         // menu pause: the whole machine holds (PAUSE_EN)
     reg core_reset = 0;                         // core reset: the VDP counters restart
     reg [31:0] vcfg = 32'h0;
+`ifdef HZ120
+    // Integer scale unless +SL_OUT=1 asks for Full.
+    wire sl_out_tb = (sl_out_arg < 0) ? 1'b0 : sl_out_arg[0];
+`else
     // A height switch moves the Integer picture top (row 24 for 224 lines, row 0
     // for 240): the first full frame in the new mode tears at the top while the
     // halt re-phases (one frame; the waits return to the steady band after).
     // The switch runs use Full scale instead (the firmware default), whose top
     // stays at row 0; the progressive runs above keep Integer scale.
-    wire sl_out_tb = (hswitch != 0);
+    // +SL_OUT= overrides this (0 Integer, 1 Full).
+    wire sl_out_tb = (sl_out_arg < 0) ? (hswitch != 0) : sl_out_arg[0];
+`endif
     wire pause_core;
 
     wire [7:0] ovx, ovy;
@@ -71,7 +91,11 @@ module tb_frame_lock;
 
     // ---- the VDP side -------------------------------------------------------------
     localparam LINE = 3420, LINES_FRAME = 262;
+`ifdef HZ120
+    localparam NATIVE_HTOTAL = 858, NATIVE_VTOTAL = 525;
+`else
     localparam NATIVE_HTOTAL = 1652, NATIVE_VTOTAL = 750;
+`endif
     integer pix;
     integer lc = 0, ln = 0;
     reg     hblank = 1, vblank = 1, hsync = 0, ce_pix = 0;
@@ -170,16 +194,28 @@ module tb_frame_lock;
     end
 
     // ---- what was written where -----------------------------------------------------
-    reg        t_ok   [0:32*320-1];
-    integer    t_frame[0:32*320-1];
-    integer    t_line [0:32*320-1];
-    integer    t_col  [0:32*320-1];
-    reg        t_par  [0:32*320-1];
-    realtime   t_time [0:32*320-1];
+`ifdef HZ120
+    localparam FB_WORDS = 2 * 320 * 240;
+`else
+    localparam FB_WORDS = 32 * 320;
+`endif
+    reg        t_ok   [0:FB_WORDS-1];
+    integer    t_frame[0:FB_WORDS-1];
+    integer    t_line [0:FB_WORDS-1];
+    integer    t_col  [0:FB_WORDS-1];
+    reg        t_par  [0:FB_WORDS-1];
+    realtime   t_time [0:FB_WORDS-1];
     integer    i;
-    initial for (i = 0; i < 32 * 320; i = i + 1) begin t_ok[i] = 0; t_frame[i] = -1; t_line[i] = -1; t_col[i] = -1; t_par[i] = 0; t_time[i] = 0; end
+    initial for (i = 0; i < FB_WORDS; i = i + 1) begin t_ok[i] = 0; t_frame[i] = -1; t_line[i] = -1; t_col[i] = -1; t_par[i] = 0; t_time[i] = 0; end
+`ifdef HZ120
+    // y==240 is the pause row and is not stored. 240*320 aliases the other
+    // bank's pixel 0, so a shadow write there would hide a real pixel.
+    always @(posedge clk) begin
+        if (dut.ce_pix & ~dut.ce_pix_r && y < 8'd240) begin
+`else
     always @(posedge clk) begin
         if (dut.ce_pix & ~dut.ce_pix_r) begin
+`endif
             t_ok[dut.mem_portA_addr]    = ~hblank & ~vblank & (x < W);
             t_frame[dut.mem_portA_addr] = frame;
             t_line[dut.mem_portA_addr]  = y;
@@ -198,6 +234,42 @@ module tb_frame_lock;
     integer frame_w0 = 0;                       // field count at the window start
     reg     used;
     reg     [7:0] want_line;
+`ifdef HZ120
+    // The bank on screen is a finished field, not the one the VDP is
+    // writing. One frame id and one field parity for the whole refresh
+    // means the two banks are not mixed.
+    reg     par_set = 0, par_seen = 0;
+    integer frame_seen = 0;
+    always @(posedge clk_pixel) begin
+        if (dut.cx == 11'd0 && dut.cy == 10'd0)
+            par_set = 0;
+        used = checking && !forgive && dut.active && dut.sl_show && dut.cy < 10'd480 && ({2'b00, dut.xx} < W);
+        if (used) begin
+            want_line = dut.yy_s;
+            n_read = n_read + 1;
+            if (!par_set) begin
+                par_seen = t_par[dut.mem_portB_addr];
+                frame_seen = t_frame[dut.mem_portB_addr];
+                par_set = 1;
+            end
+            if (!t_ok[dut.mem_portB_addr]
+                || t_line[dut.mem_portB_addr] != want_line || t_col[dut.mem_portB_addr] != dut.xx
+                || t_frame[dut.mem_portB_addr] != frame_seen
+                || (((ilace != 0) || (dres != 0)) && t_par[dut.mem_portB_addr] != par_seen)) begin
+                bad = bad + 1;
+                if (bad <= 10)
+                    $display("UNWRITTEN %0dx%0d cy=%0d cx=%0d: read line %0d col %0d: found ok=%b frame %0d (want %0d) line %0d col %0d par %b (want %b)",
+                             W, H, dut.cy, dut.cx, want_line, dut.xx,
+                             t_ok[dut.mem_portB_addr], t_frame[dut.mem_portB_addr], frame_seen,
+                             t_line[dut.mem_portB_addr], t_col[dut.mem_portB_addr],
+                             t_par[dut.mem_portB_addr], par_seen);
+            end else begin
+                rd_age = $realtime - t_time[dut.mem_portB_addr];
+                if (rd_age < rd_age_min) rd_age_min = rd_age;
+            end
+        end
+    end
+`else
     always @(posedge clk_pixel) begin
         if (dut.cy == dut.sl_pic_top && dut.cx == 11'd100) begin
             exp_frame = frame;
@@ -223,9 +295,11 @@ module tb_frame_lock;
             end
         end
     end
+`endif
 
     // ---- the halt: wait per frame -------------------------------------------------------
-    // steady band: free 60.0935 Hz vs HDMI 59.9274 Hz -> ~46 us/frame.
+    // steady band: free 60.0935 Hz vs HDMI 59.9274 Hz -> ~46 us/frame
+    // (hz120: free 60.0935 Hz vs two 480p120 frames at 59.9401 Hz -> ~43 us).
     // pre-lock transients (a ~0 us coincidental release, one full-frame wait)
     // can only happen before the phase locks; the scenario awaits lock before
     // checking, so the checked windows admit no forgiveness.
@@ -263,7 +337,11 @@ module tb_frame_lock;
     integer pix_clks = 0;
     integer frames_seen = 0;
     integer period_viol = 0;
+`ifdef HZ120
+    localparam integer NATIVE_PERIOD = NATIVE_HTOTAL * NATIVE_VTOTAL;   // 858*525 = 450450
+`else
     localparam integer NATIVE_PERIOD = NATIVE_HTOTAL * NATIVE_VTOTAL;   // 1239000
+`endif
     always @(posedge clk_pixel) begin
         pix_clks = pix_clks + 1;
         if (dut.cx == 11'd0 && dut.cy == 10'd0) begin
@@ -311,7 +389,13 @@ module tb_frame_lock;
     end
     always @(posedge clk_pixel) begin
         if (checking && !core_reset) begin
-            if (dut.clk_audio && !aud_clk_prev) begin
+            // A pause (frame-sync halt or menu) holds the sample by design;
+            // repeats across a pause are not a stuck sample, so the max-run
+            // check below only counts repeats while the machine runs. Holds
+            // are still checked by aud_change_while_paused above.
+            if (pause_core || menu_pause) begin
+                run = 1;
+            end else if (dut.clk_audio && !aud_clk_prev) begin
                 aud_words = aud_words + 1;
                 if (dut.audio_sample_word[0] === 16'hxxxx || dut.audio_sample_word[0] !== dut.audio_sample_word[0]) begin
                     aud_x = aud_x + 1;
@@ -399,23 +483,42 @@ module tb_frame_lock;
                 if (wswitch) W = (W == 320) ? 256 : 320;
                 if (hswitch) H = (H == 224) ? 240 : 224;
                 $display("mode switch to %0dx%0d at a halt", W, H);
+`ifdef HZ120
+                // The pre-switch field stays on screen until the first
+                // post-switch field completes and swaps in. After a height
+                // switch the pause point moves ~1 ms, so one release misses
+                // its even-frame slot (a single ~15.7 ms halt, then locked
+                // again); forgive the transition plus five refreshes.
+                // Waits stay checked, with two out-of-band halts allowed
+                // for the two height switches (see the checkpoint below).
+                forgive = 1; wait_hdmi_frames(6); forgive = 0;
+`else
                 forgive = 1; wait_hdmi_frames(1); forgive = 0;
+`endif
                 wait_hdmi_frames(5);
                 while (!pause_core) @(posedge clk);
                 if (wswitch) W = (W == 320) ? 256 : 320;
                 if (hswitch) H = (H == 224) ? 240 : 224;
                 $display("mode switch back to %0dx%0d at a halt", W, H);
+`ifdef HZ120
+                forgive = 1; wait_hdmi_frames(6); forgive = 0;
+`else
                 forgive = 1; wait_hdmi_frames(1); forgive = 0;
+`endif
                 wait_hdmi_frames(5);
             end
             checking = 0;
+`ifdef HZ120
+            checkpoint("short-settled", 0, hswitch ? 2 : 0);
+`else
             checkpoint("short-settled", 0, 0);
+`endif
             if (period_viol != 0) begin $display("FAIL short-settled: %0d bad periods", period_viol); $fatal(1, "tb_frame_lock: FAIL"); end
             if (aud_change_while_paused != 0) begin $display("FAIL short-settled: audio moved while paused"); $fatal(1, "tb_frame_lock: FAIL"); end
             if (aud_x != 0) begin $display("FAIL short-settled: %0d X audio words", aud_x); $fatal(1, "tb_frame_lock: FAIL"); end
             if (max_run > 8) begin $display("FAIL short-settled: audio max run %0d > 8", max_run); $fatal(1, "tb_frame_lock: FAIL"); end
-            $display("tb_frame_lock %0dx%0d ilace=%0d dres=%0d wswitch=%0d hswitch=%0d: PASS, %0d HDMI frames (lock %0d), audio words %0d max run %0d",
-                     W, H, ilace, dres, wswitch, hswitch, hdmi_frames, lock_took, aud_words, max_run);
+            $display("tb_frame_lock %0dx%0d ilace=%0d dres=%0d wswitch=%0d hswitch=%0d sl_out=%0d: PASS, %0d HDMI frames (lock %0d), audio words %0d max run %0d",
+                     W, H, ilace, dres, wswitch, hswitch, sl_out_tb, hdmi_frames, lock_took, aud_words, max_run);
             $finish;
         end
         // startup: await the lock, then check 10 locked frames with no
@@ -467,8 +570,8 @@ module tb_frame_lock;
         checkpoint("post-reset", 0, 0);
 
         bad_total = bad_total + bad;
-        $display("tb_frame_lock %0dx%0d: PASS, %0d HDMI frames (lock %0d, relock pause %0d reset %0d), audio words %0d max run %0d, %0d X words, %0d pause changes",
-                 W, H, hdmi_frames, lock_took, relock_pause, relock_reset, aud_words, max_run, aud_x, aud_change_while_paused);
+        $display("tb_frame_lock %0dx%0d sl_out=%0d: PASS, %0d HDMI frames (lock %0d, relock pause %0d reset %0d), audio words %0d max run %0d, %0d X words, %0d pause changes",
+                 W, H, sl_out_tb, hdmi_frames, lock_took, relock_pause, relock_reset, aud_words, max_run, aud_x, aud_change_while_paused);
         if (period_viol != 0 || aud_x != 0 || aud_change_while_paused != 0) begin
             $display("tb_frame_lock %0dx%0d: FAIL (period %0d, X %0d, pause-changes %0d)", W, H, period_viol, aud_x, aud_change_while_paused);
             $fatal(1, "tb_frame_lock: FAIL");

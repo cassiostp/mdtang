@@ -7,6 +7,23 @@ if {$argc == 0} {
 
 set dev [lindex $argv 0]
 
+# TangCore build variant: standard (the normal 720p build) or hz120 (the
+# 480p 120 Hz build). Only console138k has an hz120 build.
+set variant "standard"
+if {[info exists ::env(TANGCORE_VARIANT)]} {
+    set variant $::env(TANGCORE_VARIANT)
+}
+if {$variant eq ""} {
+    set variant "standard"
+}
+if {$variant ne "standard" && $variant ne "hz120"} {
+    error "Unknown TANGCORE_VARIANT '$variant' (want standard or hz120)"
+}
+if {$variant eq "hz120" && $dev ne "console138k"} {
+    error "TANGCORE_VARIANT=hz120 needs console138k (got $dev)"
+}
+puts "TangCore variant: $variant"
+
 if {$dev eq "mega60k"} {
     set_device GW5AT-LV60PG484AC1/I0 -device_version B
     add_file -type cst "src/boards/mega.cst"
@@ -149,7 +166,7 @@ add_file -type verilog "src/vdp/vram.v"
 
 set_option -synthesis_tool gowinsynthesis
 set_option -top_module mdtang_top
-set_option -include_path {"src/common"}
+set_option -include_path {"src/common" "src/variant/$variant"}
 set_option -verilog_std sysv2017
 set_option -vhdl_std vhd2008
 set_option -ireg_in_iob 1
