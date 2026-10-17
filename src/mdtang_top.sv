@@ -135,7 +135,7 @@ wire [31:0] video_config;       // from iosys
 wire       pause_menu = core_config[17];   // menu pause from iosys
 // video_std_timing selects the standard 60 Hz timing (for displays that
 // refuse the native rate; a menu option for it may come later).
-wire       video_std_timing = 1'b0;
+wire       video_std_timing = 1'b1;
 wire [3:0] red   /* xsynthesis syn_keep=1 */, 
            green /* xsynthesis syn_keep=1 */, 
            blue  /* xsynthesis syn_keep=1 */;
