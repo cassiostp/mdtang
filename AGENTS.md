@@ -36,7 +36,7 @@ gw_sh build.tcl console138k                        # standard 720p build (also w
 TANGCORE_VARIANT=hz120 gw_sh build.tcl console138k # 480p 120 Hz build
 ```
 
-Unset, empty or `standard` is the normal build; `hz120` is the 480p120 build (console138k only, anything else is an error); anything else stops with an error. `build.tcl` prints `TangCore variant: <name>` so it shows in the build log, and sets the include path to `src/variant/<variant>` (a second `set_option -include_path` line; Gowin takes one path per call, and the old `src/common` entry is unused): the files that differ (`framebuffer_sync.sv`, `hdmi.sv`, `textdisp.v`, the two `pll_74.v`) do `` `include "variant.vh" ``, which defines `HZ120` for hz120 and nothing for standard. The standard variant is the unmodified build; every 120 Hz difference is inside `` `ifdef HZ120 ``. CI:
+Unset, empty or `standard` is the normal build; `hz120` is the 480p120 build (console138k only, anything else is an error); anything else stops with an error. `build.tcl` prints `TangCore variant: <name>` so it shows in the build log, and sets the include path to `src/variant/<variant>` (a second `set_option -include_path` line with an absolute path derived from the script's location: Gowin resolves the path at synthesis time under `impl/`, so a relative path misses): the files that differ (`framebuffer_sync.sv`, `hdmi.sv`, `textdisp.v`, the two `pll_74.v`) do `` `include "variant.vh" ``, which defines `HZ120` for hz120 and nothing for standard. The standard variant is the unmodified build; every 120 Hz difference is inside `` `ifdef HZ120 ``. CI:
 
 ```sh
 gh workflow run cores.yml -R cassiostp/tangcore --ref ci/core-builds \
