@@ -9,6 +9,9 @@
         <File path="src/common/dpram32_block.v" type="file.verilog" enable="1"/>
         <File path="src/common/dpram_block.v" type="file.verilog" enable="1"/>
         <File path="src/framebuffer_sync.sv" type="file.verilog" enable="1"/>
+        <File path="src/scanlines.v" type="file.verilog" enable="1"/>
+        <File path="src/video_fx.v" type="file.verilog" enable="1"/>
+        <File path="src/smooth.v" type="file.verilog" enable="1"/>
         <File path="src/fx68k/fx68k.sv" type="file.verilog" enable="1"/>
         <File path="src/fx68k/fx68kAlu.sv" type="file.verilog" enable="1"/>
         <File path="src/fx68k/uaddrPla.sv" type="file.verilog" enable="1"/>
@@ -86,6 +89,7 @@
         <File path="src/peripherals/lightgun.sv" type="file.verilog" enable="1"/>
         <File path="src/peripherals/multitap.sv" type="file.verilog" enable="1"/>
         <File path="src/peripherals/teamplayer.sv" type="file.verilog" enable="1"/>
+        <File path="src/peripherals/EEPROM_24CXX.sv" type="file.verilog" enable="1"/>
         <File path="src/system.sv" type="file.verilog" enable="1"/>
         <File path="src/t80/t80.v" type="file.verilog" enable="1"/>
         <File path="src/t80/t80_alu.v" type="file.verilog" enable="1"/>
@@ -97,7 +101,7 @@
         <File path="src/vdp/vram.v" type="file.verilog" enable="1"/>
         <File path="src/console60k/mdtang.cst" type="file.cst" enable="1"/>
         <File path="src/m138k/m138k.cst" type="file.cst" enable="0"/>
-        <File path="src/mdtang.sdc" type="file.sdc" enable="1"/>
+        <File path="src/boards/console60k.sdc" type="file.sdc" enable="1"/>
         <File path="src/cpu.gao" type="file.gao" enable="0"/>
         <File path="src/framebuffer.rao" type="file.gao" enable="0"/>
         <File path="src/iosys.gao" type="file.gao" enable="0"/>

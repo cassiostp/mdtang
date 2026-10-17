@@ -38,7 +38,9 @@
 // 1. Added a separate clock for Z80 (CLK_Z80) that is half the speed of MCLK
 //    due to lower Fmax of T80 on Tang.
 // 2. Converted VHDL T80 to Verilog.
-// 3. No SVP, EEPROM or GameGenie for now.
+// 3. No SVP or GameGenie for now. I2C EEPROM carts use MiSTer's
+//    EPPROM_24CXX with the per-game EEPROM_QUIRK encoding (firmware-side
+//    serial match in core/md.cpp, replacing MiSTer's download snooping).
 //
 // `define NO_SOUND
 
@@ -60,7 +62,7 @@ module system
 	input         FAST_FIFO,
 	input         SRAM_QUIRK,
 	input         SRAM00_QUIRK,
-	input         EEPROM_QUIRK,
+	input   [3:0] EEPROM_QUIRK,	// MiSTer encoding: 0 none, else chip type + SDA/SCL wiring
 	input         NORAM_QUIRK,
 	input         PIER_QUIRK,
 	input         SVP_QUIRK, 
@@ -74,8 +76,8 @@ module system
 	input [128:0] GG_CODE,
 	output        GG_AVAILABLE,
 
-	input  [14:0] BRAM_A,		// SRAM access interface
-	input  [15:0] BRAM_DI,
+	input  [14:0] BRAM_A,		// EEPROM save interface (byte-wide: A[12:0] = byte address,
+	input  [15:0] BRAM_DI,		// DI[7:0]/DO[7:0] carry the byte; SRAM itself lives in SDRAM)
 	output [15:0] BRAM_DO,
 	input         BRAM_WE,
 	output        BRAM_CHANGE,
@@ -139,7 +141,8 @@ module system
 	output		  TRANSP_DETECT,
 	
 	//debug
-	input         PAUSE_EN,
+	input         PAUSE_EN,       // 1: pause 68k, vdp, z80, fm and psg (frame sync halt holds the audio sample; menu pause mutes at the top)
+	input         PAUSE_ALL,      // 1: menu pause (PAUSE_EN already includes it; kept for compatibility)
 	input         BGA_EN,
 	input         BGB_EN,
 	input         SPR_EN,
@@ -187,6 +190,9 @@ reg [15:0] NO_DATA;
 reg  [4:0] BANK_REG[0:7];
 reg        BANK_ROM;
 reg        BANK_SRAM;
+reg        SRAM_WR;       // one-cycle pulse: an SRAM (battery RAM) write was issued
+
+assign BRAM_CHANGE = SRAM_WR | eeprom_ram_we;
 
 
 wire reset, hard_reset;
@@ -239,20 +245,20 @@ always @(posedge MCLK) begin
 			ZCLKCNT <= 0;
 		if (clk_z80_cycle) 				// make sure Z80_CLKENn is 2 MCLK wide and aligned with CLK_Z80
 			if (ZCLKCNT == 13 | ZCLKCNT == 14) 
-				Z80_CLKENn <= 1; // ~PAUSE_EN;
+				Z80_CLKENn <= ~(PAUSE_ALL | PAUSE_EN);
 			else
 				Z80_CLKENn <= 0;
 		
 		Z80_CLKENp <= 0;
 		if (ZCLKCNT == 7) begin
-			Z80_CLKENp <= 1; // ~PAUSE_EN;
+			Z80_CLKENp <= ~(PAUSE_ALL | PAUSE_EN);
 		end
 
 		PSG_CLKEN <= 0;
 		PCLKCNT <= PCLKCNT + 1'b1;
 		if (PCLKCNT == 14) begin
 			PCLKCNT <= 0;
-			PSG_CLKEN <= 1; 	// ~PAUSE_EN;	// nand2mario: do not pause PSG for frame sync
+			PSG_CLKEN <= ~(PAUSE_ALL | PAUSE_EN); 	// frame sync holds the audio sample, menu pause stops it (muted at the top)
 		end
 
 		M68K_CLKENp <= 0;
@@ -274,7 +280,7 @@ always @(posedge MCLK) begin
 		FCLKCNT <= FCLKCNT + 1'b1;
 		if (FCLKCNT == 6) begin
 			FCLKCNT <= 0;
-			FM_CLKEN <= 1; // ~PAUSE_EN;		// nand2mario: do not pause FM for frame sync
+			FM_CLKEN <= ~(PAUSE_ALL | PAUSE_EN);		// frame sync holds the audio sample, menu pause stops it (muted at the top)
 		end
 	end
 end
@@ -747,6 +753,78 @@ assign MEM_WDATA = MBUS_DO;
 //-----------------------------------------------------------------------
 // EEPROM Handling
 //-----------------------------------------------------------------------
+// I2C EEPROM (24Cxx) carts, ported from MegaDrive_MiSTer rtl/cartridge.sv
+// (the md_eeprom_* logic) onto this system's MBUS: the SDA/SCL capture and
+// read decode run in MBUS_SELECT below, the chip itself is MiSTer's
+// EPPROM_24CXX, and its contents live in an 8 KB BRAM whose second port is
+// the top level's BRAM save interface (MiSTer keeps them in its SRAM
+// dpram's save port the same way, so .sav byte N = EEPROM byte N).
+// EEPROM (like Pier/SVP) games must not see the generic $200000 SRAM decode.
+wire noram_eff = NORAM_QUIRK | (|EEPROM_QUIRK) | PIER_QUIRK | SVP_QUIRK;
+
+reg         eeprom_sdai, eeprom_scl, eeprom_bank;
+wire        eeprom_sdao;
+wire [12:0] eeprom_ram_a;
+wire  [7:0] eeprom_ram_d;
+wire        eeprom_ram_we;
+wire  [7:0] eeprom_ram_q, eeprom_bram_q;
+wire        eeprom_sda = eeprom_sdao & eeprom_sdai;
+
+// The 8 KB store, as the project's dpram (port A: the chip, port B:
+// the top level's BRAM save interface): a hand-rolled read-always
+// array infers a DPB write mode Gowin's P&R rejects (PA2122), while
+// this form is already all over the design. Reads pause while their
+// own port writes, which neither side does mid-read (the chip
+// separates its read/write phases; the bridge never reads while it
+// restores).
+dpram #(.ADRW(13), .DATW(8)) eeprom_dpram (
+	.clock(MCLK),
+	.wren_a(eeprom_ram_we), .address_a(eeprom_ram_a),
+	.data_a(eeprom_ram_d), .q_a(eeprom_ram_q),
+	.wren_b(BRAM_WE), .address_b(BRAM_A[12:0]),
+	.data_b(BRAM_DI[7:0]), .q_b(eeprom_bram_q)
+);
+assign BRAM_DO = {8'b0, eeprom_bram_q};
+
+// Read decode and SDA bit position, as MiSTer's md_eeprom_cs/md_eeprom_data
+// (MBUS_A is a word address, like MiSTer's cart_addr).
+wire eeprom_cs = (EEPROM_QUIRK[3:2] == 2'b01) ? (MBUS_A[23:19] == 5'b00111)
+	: ((|EEPROM_QUIRK[2:0]) && ((eeprom_bank & ~MBUS_A[20]) || !EEPROM_QUIRK[3]) && MBUS_A[23:21] == 3'b001);
+reg [15:0] eeprom_data;
+always_comb begin
+	eeprom_data = 0;
+	casex (EEPROM_QUIRK)
+		4'b0001: eeprom_data[7] = eeprom_sda;
+		4'b0010: eeprom_data[0] = eeprom_sda;
+		4'b0011: eeprom_data[1] = eeprom_sda;
+		4'b01xx: eeprom_data[7] = eeprom_sda;
+		4'b1xxx: eeprom_data[0] = eeprom_sda;
+		default: ;
+	endcase
+end
+
+//                                        C01     C01     C02     C16      C65       C08      C04
+wire [12:0] eeprom_mask[8] = '{13'h00, 13'h7f, 13'h7f, 13'hff, 13'h7ff, 13'h1fff, 13'h3ff, 13'h1ff};
+
+EPPROM_24CXX e24cxx
+(
+	.clk(MCLK),
+	.rst(reset),
+	.en(1),
+
+	.mode((EEPROM_QUIRK[2:0] <= 3'b010) ? 2'd0 : (EEPROM_QUIRK[2:0] == 3'b101) ? 2'd2 : 2'd1),
+	.mask(eeprom_mask[EEPROM_QUIRK[2:0]]),
+
+	.sda_i(eeprom_sdai),
+	.sda_o(eeprom_sdao),
+	.scl(eeprom_scl),
+
+	.ram_addr(eeprom_ram_a),
+	.ram_d(eeprom_ram_d),
+	.ram_wr(eeprom_ram_we),
+	.ram_q(eeprom_ram_q)
+);
+
 reg ep_si, m95_so, ep_sck, ep_hold, ep_cs;
 wire [7:0] m95_di, m95_q;
 wire [11:0] m95_addr;
@@ -889,6 +967,10 @@ always @(posedge MCLK) begin
 		ZBUS_SEL <= 0;
 		BANK_ROM <= 0;
 		BANK_SRAM <= 0;
+		SRAM_WR <= 0;
+		eeprom_sdai <= 1;
+		eeprom_scl <= 1;
+		eeprom_bank <= 0;
 		mstate <= MBUS_IDLE;
 		pier_count <= 0;
 		MBUS_RNW <= 1;
@@ -907,6 +989,7 @@ always @(posedge MCLK) begin
 			if (cycle_cnt) cycle_cnt <= cycle_cnt - 1'd1;
 		end
 
+		SRAM_WR <= 0;       // pulses once per issued SRAM write; default here, set in MBUS_SELECT
 		if (M68K_AS_N) M68K_MBUS_DTACK_N <= 1;
 		if (~Z80_IO)   Z80_MBUS_DTACK_N  <= 1;
 		if (~VBUS_SEL) VDP_MBUS_DTACK_N  <= 1;
@@ -982,6 +1065,7 @@ always @(posedge MCLK) begin
 						MEM_REQ <= ~MEM_ACK;
 						MEM_ADDR <= {8'b0_1000_001, MBUS_A[16:1]};
 						MEM_WE <= ~MBUS_RNW;
+						SRAM_WR <= ~MBUS_RNW;
 						MBUS_UDS_N <= M68K_UDS_N;
 						MBUS_LDS_N <= M68K_LDS_N;
 						mstate <= MBUS_SRAM_READ;
@@ -994,8 +1078,23 @@ always @(posedge MCLK) begin
 							data <= MBUS_A[1] ? 16'h0001 : 16'h8010;
 						end
 					end
-					else if (EEPROM_QUIRK && {MBUS_A,1'b0} == 'h200000) begin
-						data <= 0;
+					else if (eeprom_cs && MBUS_RNW) begin
+						data <= eeprom_data;
+						mstate <= MBUS_FINISH;
+					end
+					else if ((|EEPROM_QUIRK) && ~MBUS_RNW && msrc == MSRC_M68K && MBUS_A[23:21] == 3'b001
+					         && (!M68K_UDS_N || !M68K_LDS_N)) begin
+						// SDA/SCL capture, as MiSTer's cart-write block (lwr = odd
+						// byte, uwr = even byte). Only the 68K bit-bangs the EEPROM.
+						casex (EEPROM_QUIRK)
+							4'b0001: if (~M68K_LDS_N) {eeprom_sdai, eeprom_scl} <= MBUS_DO[7:6];
+							4'b0010: if (~M68K_LDS_N) {eeprom_scl, eeprom_sdai} <= MBUS_DO[1:0];
+							4'b0011: if (~M68K_LDS_N) {eeprom_scl, eeprom_sdai} <= MBUS_DO[1:0];
+							4'b01xx: if (MBUS_A[20:19] == 2'b10) {eeprom_scl, eeprom_sdai} <= MBUS_DO[1:0];
+							4'b1xxx:      if (~MBUS_A[20] & ~M68K_LDS_N &  M68K_UDS_N) eeprom_sdai <= MBUS_DO[0];
+									else if (~MBUS_A[20] &  M68K_LDS_N & ~M68K_UDS_N) eeprom_scl  <= MBUS_DO[8];
+									else if (~MBUS_A[20] & ~M68K_LDS_N & ~M68K_UDS_N) eeprom_bank <= ~MBUS_DO[0];
+						endcase
 						mstate <= MBUS_FINISH;
 					end
 					else if ((SRAM_QUIRK | SRAM00_QUIRK) && {MBUS_A,1'b0} == 'h200000) begin
@@ -1003,6 +1102,7 @@ always @(posedge MCLK) begin
 						MEM_REQ <= ~MEM_ACK;
 						MEM_ADDR <= {8'b0_1000_001, MBUS_A[16:1]};
 						MEM_WE <= ~MBUS_RNW;
+						SRAM_WR <= ~MBUS_RNW;
 						MBUS_UDS_N <= M68K_UDS_N;
 						MBUS_LDS_N <= M68K_LDS_N;
 						mstate <= MBUS_SRAM_READ;
@@ -1028,12 +1128,13 @@ always @(posedge MCLK) begin
 						JCART_SEL <= 1;
 						mstate <= MBUS_JCRT_READ;
 					end
-					else if(MBUS_A[23:21] == 1 && ~&MBUS_A[20:19] && ~NORAM_QUIRK) begin
+					else if(MBUS_A[23:21] == 1 && ~&MBUS_A[20:19] && ~noram_eff) begin
 						// 200000-37FFFF
 						// SRAM_SEL <= 1;
 						MEM_REQ <= ~MEM_ACK;
 						MEM_ADDR <= {8'b0_1000_001, MBUS_A[16:1]};
 						MEM_WE <= ~MBUS_RNW;
+						SRAM_WR <= ~MBUS_RNW;
 						MBUS_UDS_N <= M68K_UDS_N;
 						MBUS_LDS_N <= M68K_LDS_N;
 						mstate <= MBUS_SRAM_READ;

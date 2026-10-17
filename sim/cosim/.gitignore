@@ -1,0 +1,2 @@
+# co-sim model build output (docker Verilator; see Makefile)
+build/

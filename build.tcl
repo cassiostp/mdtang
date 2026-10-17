@@ -46,7 +46,12 @@ if {$dev eq "mega60k"} {
 } else {
     error "Unknown device $dev"
 }
-add_file -type sdc "src/mdtang.sdc"
+# Gowin reads one SDC per project; the 60K needs two extra cuts
+if {$dev eq "console60k"} {
+    add_file -type sdc "src/boards/console60k.sdc"
+} else {
+    add_file -type sdc "src/mdtang.sdc"
+}
 set_option -output_base_name mdtang_${dev}
 
 add_file -type verilog "src/iosys/iosys_bl616.v"
@@ -73,6 +78,9 @@ add_file -type verilog "src/hdmi/serializer.sv"
 add_file -type verilog "src/hdmi/source_product_description_info_frame.sv"
 add_file -type verilog "src/hdmi/tmds_channel.sv"
 add_file -type verilog "src/framebuffer_sync.sv"
+add_file -type verilog "src/scanlines.v"
+add_file -type verilog "src/video_fx.v"
+add_file -type verilog "src/smooth.v"
 add_file -type verilog "src/jt12/adpcm/jt10_adpcm_div.v"
 add_file -type verilog "src/jt12/jt12.v"
 add_file -type verilog "src/jt12/jt12_acc.v"
@@ -129,6 +137,7 @@ add_file -type verilog "src/peripherals/genesis_lpf.v"
 add_file -type verilog "src/peripherals/lightgun.sv"
 add_file -type verilog "src/peripherals/multitap.sv"
 add_file -type verilog "src/peripherals/teamplayer.sv"
+add_file -type verilog "src/peripherals/EEPROM_24CXX.sv"
 add_file -type verilog "src/system.sv"
 add_file -type verilog "src/t80/t80.v"
 add_file -type verilog "src/t80/t80_alu.v"
