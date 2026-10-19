@@ -1,8 +1,9 @@
 #!/bin/sh
 # Battery-save sims (iverilog). From this directory:
 #   ./run.sh              compile and run all three testbenches
-# On this machine iverilog lives in docker:
-#   docker run --rm -v <repo>:/w -w /w/sim/saveram tangcore-iv:1 ./run.sh
+# On this machine iverilog lives in docker, e.g.:
+#   simrun -v <repo>:/w -w /w/sim/saveram tangcore-iv:1 ./run.sh
+# (simrun is an optional local helper; plain `docker run --rm` works too.)
 # Gowin tolerates the "input reg" port declaration in iosys; iverilog does not,
 # so run.sh compiles a sim-only copy with that softened (and the kbd write
 # stubbed, which needs an input port).

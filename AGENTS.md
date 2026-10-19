@@ -67,6 +67,11 @@ The scaler asserts `pause_core` when input reaches line 0 (`sync_y` 1/2, +1 with
 
 ## Simulations (`sim/cosim/README.md` and `sim/video_fx/README.md` say how to run; iverilog)
 
+Sim scripts use `simrun` when it is on PATH (else `docker run --rm`);
+set `SIM_PREFIX` to namespace container names when sharing the machine.
+`simrun` is an optional local helper (persistent ccache + full-core env),
+not part of the repositories.
+
 - `bigrom`: headless full-system >4 MB ROM/SSF2-banking/I2C-EEPROM on the real `mdtang_top` Verilator build.
 - `cosim`: Verilator `iosys_bl616` UART engine + `sdram.v` port-3 client for firmware co-sim, no game/video/audio.
 - `eeprom`: 68K bit-bang vs `EPPROM_24CXX` wired as `system.sv` (modes 0/1/2, `BRAM_CHANGE`).
