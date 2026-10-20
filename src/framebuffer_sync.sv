@@ -205,9 +205,14 @@ wire [17:0] ilace_addr_a = ilace_lineaddr_a + ilace_x;
 wire [8:0] weave_line;
 wire [1:0] ilace_rd_bank = dres_pixel ? (weave_line[0] ? ilace_bank_odd : ilace_bank_even) : ilace_bank_last;
 wire [7:0] ilace_rd_line = dres_pixel ? weave_line[8:1] : yy_s;
+reg [1:0] ilace_rd_bank_r = 0;
+reg [7:0] ilace_rd_line_r = 0;
 reg [17:0] ilace_lineaddr_b = 0;
-always @(posedge clk_pixel)
-    ilace_lineaddr_b <= ilace_rd_bank * 18'd76800 + ilace_rd_line * 18'd320;
+always @(posedge clk_pixel) begin
+    ilace_rd_bank_r <= ilace_rd_bank;
+    ilace_rd_line_r <= ilace_rd_line;
+    ilace_lineaddr_b <= ilace_rd_bank_r * 18'd76800 + ilace_rd_line_r * 18'd320;
+end
 wire [17:0] ilace_addr_b = ilace_lineaddr_b + xx;
 wire ilace_ready = dres_pixel ? (&ilace_valid) : (|ilace_valid);
 assign pause_core = ilace_on ? ilace_pause : pause_prog;
