@@ -1,4 +1,11 @@
+`ifdef VERILATOR
+// Headless machine models have no board header; use the native VDP count.
+`ifndef MD_INTERLACE
+`define MD_INTERLACE
+`endif
+`else
 `include "variant.vh"
+`endif
 // Copyright (c) 2010 Gregory Estrade (greg@torlus.com)
 // Copyright (c) 2018 Till Harbaum
 // Copyright (c) 2018-2019 Alexey Melnikov

@@ -1,4 +1,10 @@
+`ifndef VERILATOR
 `include "variant.vh"
+`else
+`ifdef MD_VIDEO_SIM
+`include "variant.vh"
+`endif
+`endif
 // Mega Drive / Genesis core for Tang FPGA boards
 // nand2mario, 10/2024
 module mdtang_top (
@@ -434,7 +440,7 @@ framebuffer #(
 ) fb (
     .clk(clk_sys), .resetn(~reset), .clk_pixel(hclk), .clk_5x_pixel(hclk5),
     .hblank(hblank), .vblank(vblank),
-    `ifdef MD_INTERLACE
+`ifdef MD_INTERLACE
     .ce_pix(ce_pix & (interlace_any | hsync_seen)),
 `else
     .ce_pix(ce_pix & hsync_seen),

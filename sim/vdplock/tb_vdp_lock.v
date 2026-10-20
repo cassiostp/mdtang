@@ -3,7 +3,8 @@
 // advances per field, and tag every stored pixel with field/line/column.
 // During scanout each parity must have one epoch and the expected position;
 // assert that the VDP never writes a bank owned by HDMI. PAL is not exposed
-// by mdtang_top (Americas/NTSC), so the integrated suite tests NTSC modes.
+// by mdtang_top (Americas/NTSC). +PAL=1 bypasses the scaler halt and
+// checks only raw VDP counter lengths; it is not a PAL video-rate test.
 `timescale 1ns/1fs
 
 module tb_vdp_lock;
@@ -15,7 +16,7 @@ module tb_vdp_lock;
     always #6.734006734 clk_pixel = ~clk_pixel;
 `endif
 
-    integer ilace = 0, dres = 0, pal_i = 0, v30 = 0, nogate = 0, nf = 12;
+    integer ilace = 0, dres = 0, pal_i = 0, v30 = 0, nogate = 0, nf = 12, bfi_arg = 0, full_arg = 0;
     initial begin
         if ($value$plusargs("ILACE=%d", ilace)) ;
         if ($value$plusargs("DRES=%d", dres)) ;
@@ -23,6 +24,8 @@ module tb_vdp_lock;
         if ($value$plusargs("V30=%d", v30)) ;
         if ($value$plusargs("NOGATE=%d", nogate)) ;
         if ($value$plusargs("NF=%d", nf)) ;
+        if ($value$plusargs("BFI=%d", bfi_arg)) ;
+        if ($value$plusargs("FULL=%d", full_arg)) ;
     end
 
     reg rst_n = 0;
@@ -132,15 +135,15 @@ module tb_vdp_lock;
         .pause_core(pause_core),
         .interlace(interlace_any), .double_res(interlace), .field(field_out), .std_timing(1'b0),
         .overlay(1'b0), .overlay_x(ovx), .overlay_y(ovy), .overlay_color(15'd0),
-        .scanlines(1'b0), .sl_darkness(2'd0), .sl_thick(1'b0), .sl_out(1'b0),
-        .video_config(32'd0),
+        .scanlines(1'b0), .sl_darkness(2'd0), .sl_thick(1'b0), .sl_out(full_arg[0]),
+        .video_config((bfi_arg & 3) << 20),
         .audio_left(aud), .audio_right(aud),
         .tmds_clk_n(tmds_clk_n), .tmds_clk_p(tmds_clk_p),
         .tmds_d_n(tmds_d_n), .tmds_d_p(tmds_d_p)
     );
 
     // Halt every field; the HDMI cadence changes with interlace.
-    always @(posedge clk_sys) ce <= rst_n && !pause_core;
+    always @(posedge clk_sys) ce <= rst_n && (pal_i != 0 || !pause_core);
 
     // ---- register write: DI = 10_RRRRR_VVVVVVVV to the control port -------
     task reg_write(input [4:0] regnum, input [7:0] value);
@@ -157,7 +160,7 @@ module tb_vdp_lock;
     // ---- measurement -------------------------------------------------------
     integer field_count = 0;
     integer line_steps = 0;
-    integer field_lines[0:63];
+    integer field_lines[0:255];
     reg [8:0] vcnt_prev = 0;
     reg field_prev = 0;
     realtime t_first = 0, t_last = 0;
@@ -175,7 +178,7 @@ module tb_vdp_lock;
             if (dut.HV_VCNT !== vcnt_prev)
                 line_steps = line_steps + 1;
             if (dut.FIELD !== field_prev) begin
-                if (field_count < 64)
+                if (field_count < 256)
                     field_lines[field_count] = line_steps;
 
                 field_count = field_count + 1;
@@ -210,6 +213,18 @@ module tb_vdp_lock;
         end
     end
 
+`ifdef HZ120
+    reg bfi_seeded = 0, bfi_swapped = 0;
+    always @(negedge clk_pixel) begin
+        if (bfi_arg != 0 && field_count >= 6 && !bfi_seeded) begin
+            fb.bfi_swap_cnt <= 11'd1799;
+            bfi_seeded = 1;
+        end
+        if (bfi_seeded && fb.bfi_phase) bfi_swapped = 1;
+        if (bfi_arg != 0 && field_count > 6 && fb.cx == 360 && fb.cy == 200 && fb.bfi_dark && fb.bfi_mode_eff == 1 && fb.rgb_pre != 0)
+            $fatal(1, "BFI black refresh is lit");
+    end
+`endif
     integer reads = 0, pubs = 0;
     reg [1:0] prev_even = 0, prev_odd = 1;
     reg [1:0] valid_prev = 0;
@@ -224,7 +239,7 @@ module tb_vdp_lock;
     reg ce_r = 0;
     always @(posedge clk_sys) begin
         ce_r <= fb.ce_pix;
-        if (interlace_any && fb.ilace_write) begin
+        if (pal_i == 0 && interlace_any && fb.ilace_write) begin
             if (fb.ilace_y == 0 && fb.ilace_x == 0) epoch = epoch + 1;
             if (fb.ilace_valid != 0 && fb.ilace_pixel &&
                 (fb.ilace_wr_bank == fb.ilace_bank_even || fb.ilace_wr_bank == fb.ilace_bank_odd))
@@ -244,7 +259,7 @@ module tb_vdp_lock;
             pubs = pubs + 1;
         end
         prev_even <= fb.ilace_bank_even; prev_odd <= fb.ilace_bank_odd;
-        if (field_count > 5 && interlace_any && fb.ilace_ready && fb.active && fb.pic_show && fb.cy < fb.FRAMEHEIGHT && fb.xx < 256) begin
+        if (pal_i == 0 && field_count > 5 && interlace_any && fb.ilace_ready && fb.active && fb.pic_show && fb.cy < fb.FRAMEHEIGHT && fb.xx < 256) begin
             a = fb.mem_portB_addr;
             rp = interlace ? fb.weave_line[0] : 0;
             rl = interlace ? fb.weave_line[8:1] : fb.yy_s;
@@ -274,12 +289,15 @@ module tb_vdp_lock;
                 if (field_lines[i] == field_lines[i-1]) $fatal(1,"fields do not alternate");
             end else if (field_lines[i] != (pal_i ? 313 : 262)) $fatal(1,"progressive length");
         end
-        if (ilace || dres) begin
+        if (pal_i == 0 && (ilace || dres)) begin
             if (nf*1e9/(t_last-t_first) < 59.8084 || nf*1e9/(t_last-t_first) > 59.8089) $fatal(1,"wrong locked rate");
             if (reads < 1000 || pubs < nf-2) $fatal(1,"missing weave/publications");
         end
-        $display("tb_vdp_lock: PASS");
+`ifdef HZ120
+        if (bfi_arg != 0 && !bfi_swapped) $fatal(1, "interlace BFI retention swap did not fire");
+`endif
+        $display("tb_vdp_lock: PASS BFI=%0d Full=%0d",bfi_arg,full_arg);
         $finish;
     end
-    initial begin #2000000000; $fatal(1,"watchdog"); end
+    initial begin #5000000000; $fatal(1,"watchdog"); end
 endmodule

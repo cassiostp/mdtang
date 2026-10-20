@@ -36,7 +36,7 @@ gw_sh build.tcl console138k                        # standard 720p build (also w
 TANGCORE_VARIANT=hz120 gw_sh build.tcl console138k # 480p 120 Hz build
 ```
 
-Unset, empty or `standard` is the normal build; `hz120` is the 480p120 build (console138k only, anything else is an error); anything else stops with an error. `build.tcl` prints `TangCore variant: <name>` so it shows in the build log, and sets the include path to `src/variant/<variant>` (a second `set_option -include_path` line with an absolute path derived from the script's location: Gowin resolves the path at synthesis time under `impl/`, so a relative path misses): the files that differ (`framebuffer_sync.sv`, `hdmi.sv`, `textdisp.v`, the two `pll_74.v`) do `` `include "variant.vh" ``, which defines `HZ120` for hz120 and nothing for standard. The 138K headers define `MD_INTERLACE` for native interlace timing and a three-field weave store; all 120 Hz differences are inside `` `ifdef HZ120 ``. The 60K boards select `src/variant/legacy/variant.vh` and retain the original short-buffer video path. CI:
+Unset, empty or `standard` is the normal build; `hz120` is the 480p120 build (console138k only, anything else is an error); anything else stops with an error. `build.tcl` prints `TangCore variant: <name>` so it shows in the build log, and sets the include path to `src/variant/<variant>` (a second `set_option -include_path` line with an absolute path derived from the script's location: Gowin resolves the path at synthesis time under `impl/`, so a relative path misses): variant-dependent hardware sources include `variant.vh`, which defines `HZ120` for the hz120 build. The 138K headers define `MD_INTERLACE` for native interlace timing and a three-field weave store; all 120 Hz differences are inside `` `ifdef HZ120 ``. The 60K boards select `src/variant/legacy/variant.vh` and retain the original short-buffer video path. CI:
 
 ```sh
 gh workflow run cores.yml -R cassiostp/tangcore --ref ci/core-builds \
@@ -54,9 +54,9 @@ the standard one stays `mdtang.bin`. Both 138K variants reserve three 320x240 RG
 ## Native-rate lock
 
 Genesis native rate is a 1652-pixel line (`NATIVE_FRAME_WIDTH = 1652` in `src/framebuffer_sync.sv`; 59.9274 Hz at 74.25 MHz). `std_timing = 1` selects the standard 1650 line; `video_std_timing` is tied `1'b0` in `src/mdtang_top.sv`, so the build is native-only.
-The scaler asserts `pause_core` when input reaches line 0 (`sync_y` 1/2, +1 with smoothing) and clears it at HDMI `hdmi_first_line`; `mdtang_top.sv` gates `system.PAUSE_EN` (M68K/Z80 clocks, audio held) on it.
+Progressive 720p asserts `pause_core` at source line 1, column 0, and clears it at HDMI `hdmi_first_line`; progressive hz120 holds a completed field until its two-refresh release; `mdtang_top.sv` gates `system.PAUSE_EN` (M68K/Z80 clocks, audio held) on it.
 
-On 138K interlace, the VDP alternates 262/263 lines. HDMI uses 1,241,460 pixel clocks per 720p refresh or 451,440 per 480p120 refresh (two refreshes per field), giving 59.80861244 fields/s, +0.127 ppm above the NTSC target. Progressive cadence is unchanged. Only line totals change: 1656/1655 in 720p, 860/859 in 480p120; sync start/width and active dimensions stay standard. `std_timing` bypasses the native cadence.
+On 138K NTSC interlace with 224-line fields, the VDP alternates 262/263 lines. HDMI uses 1,241,460 pixel clocks per 720p refresh or 451,440 per 480p120 refresh (two refreshes per field), giving 59.80861244 fields/s, +0.127 ppm above the NTSC target. Progressive cadence is unchanged. Only line totals change: 1656/1655 in 720p, 860/859 in 480p120; sync start/width and active dimensions stay standard. `std_timing` bypasses the native cadence.
 
 The interlace capture latches VBL at HBL's falling edge: VBL changes at HINT before the final eight active pixels. HDMI owns one completed field per parity; the VDP writes the third bank, halts after the last active pixel, and receives the discarded bank at the next HDMI field boundary. Mode 2 reads alternate rows from the even/odd banks (448 or 480 rows). Integer is 1x vertically, centred; Full fills the existing 4:3 viewport. At 1x scanlines alternate output rows, and thin/thick coincide. The OSD retains its progressive coordinates. Progressive video, rate and audio pitch are unchanged.
 
@@ -87,6 +87,8 @@ not part of the repositories.
 - `video_fx`: `0x13`, `video_fx` vs `model.py`, regress-vs-git-history with filters off, FX/smoothing/sync checks.
 
 Each `sim/*` bench with a `run.sh` takes `[standard|hz120]` (default both; `scanlines`, `framelock`, `video_fx`). The video benches compile the scaler with `-DHZ120 -I ../../src/variant/hz120` for the hz120 variant and the standard include without the define for standard. `saveram` and `cosim` always use the standard include.
+
+`MD_VIDEO_SIM` enables the real capture/scaler in the headless machine wrapper for `sim/interlace_smoke`; its build selects a standard/hz120 header explicitly. Ordinary headless builds keep their existing flags and use the corrected VDP field counter without compiling video. `sim/interlace_smoke/README.md` documents the local Sonic 2 script and output handling. The NTSC board uses 224-line fields for interlaced games; 480-row scaler geometry is also tested synthetically. PAL is not selected by this top.
 
 ## Traps
 

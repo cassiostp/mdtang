@@ -125,7 +125,7 @@ end
 //
 // BRAM frame buffer
 //
-localparam FB_DEPTH = WIDTH * 32;           // buffer 16 lines
+localparam FB_DEPTH = WIDTH * 32;           // progressive 32-line address ring
 localparam COLOR_WIDTH = COLOR_BITS * 3;
 localparam FB_AWIDTH = $clog2(FB_DEPTH);
 `ifdef MD_INTERLACE
@@ -274,7 +274,6 @@ wire ilace_on = 1'b0;
 wire ilace_pixel = 1'b0;
 wire dres_pixel = 1'b0;
 wire ilace_ready = 1'b1;
-// y=0 is the partial dummy line after VBL; complete active lines are 1..height.
 wire [17:0] ilace_addr_a = 0, ilace_addr_b = 0;
 wire ilace_write = 1'b0;
 assign pause_core = pause_prog;

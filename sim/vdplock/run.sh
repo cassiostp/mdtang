@@ -14,3 +14,17 @@ verilator --binary --timing -j "${JOBS:-20}" --top-module tb_vdp_lock --compiler
 ./build/$VARIANT/Vtb_vdp_lock +ILACE=1
 ./build/$VARIANT/Vtb_vdp_lock +DRES=1
 ./build/$VARIANT/Vtb_vdp_lock
+
+./build/$VARIANT/Vtb_vdp_lock +DRES=1 +FULL=1
+if [ "$VARIANT" = hz120 ]; then
+    for bfi in 1 2 3; do ./build/$VARIANT/Vtb_vdp_lock +DRES=1 +BFI=$bfi; done
+else
+    # PAL is not exposed by the board. These bypass the scaler halt and
+    # verify only the VDP's 312/313 or progressive 313-line counters.
+    for mode in ILACE DRES; do
+        ./build/$VARIANT/Vtb_vdp_lock +PAL=1 +$mode=1
+        ./build/$VARIANT/Vtb_vdp_lock +PAL=1 +$mode=1 +V30=1
+    done
+    ./build/$VARIANT/Vtb_vdp_lock +PAL=1
+    ./build/$VARIANT/Vtb_vdp_lock +PAL=1 +V30=1
+fi
