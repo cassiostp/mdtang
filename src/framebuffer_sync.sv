@@ -196,11 +196,19 @@ always @(posedge clk) begin
         if (!ilace_hblank_r && hblank && ilace_line_active) ilace_y <= ilace_y + 1'b1;
     end
 end
-wire [17:0] ilace_addr_a = ilace_wr_bank * 18'd76800 + ilace_y * 18'd320 + ilace_x;
+// Line/bank terms settle in blanking. Register them before the RAM
+// address so only the column adder drives its wide address fanout.
+reg [17:0] ilace_lineaddr_a = 18'd153600;
+always @(posedge clk)
+    ilace_lineaddr_a <= ilace_wr_bank * 18'd76800 + ilace_y * 18'd320;
+wire [17:0] ilace_addr_a = ilace_lineaddr_a + ilace_x;
 wire [8:0] weave_line;
 wire [1:0] ilace_rd_bank = dres_pixel ? (weave_line[0] ? ilace_bank_odd : ilace_bank_even) : ilace_bank_last;
 wire [7:0] ilace_rd_line = dres_pixel ? weave_line[8:1] : yy_s;
-wire [17:0] ilace_addr_b = ilace_rd_bank * 18'd76800 + ilace_rd_line * 18'd320 + xx;
+reg [17:0] ilace_lineaddr_b = 0;
+always @(posedge clk_pixel)
+    ilace_lineaddr_b <= ilace_rd_bank * 18'd76800 + ilace_rd_line * 18'd320;
+wire [17:0] ilace_addr_b = ilace_lineaddr_b + xx;
 wire ilace_ready = dres_pixel ? (&ilace_valid) : (|ilace_valid);
 assign pause_core = ilace_on ? ilace_pause : pause_prog;
 always @(posedge clk) begin
