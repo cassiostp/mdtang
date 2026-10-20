@@ -191,7 +191,6 @@ reg at_f0 = 1'b0;
 reg [1:0] bfi_cfg_s = 2'd0, bfi_cfg = 2'd0;
 reg pause_s1 = 1'b0, pause_s2 = 1'b0;
 reg wr_bank_s1 = 1'b0, wr_bank_s2 = 1'b0;
-wire [1:0] bfi_mode_eff = (bfi_cfg == 2'd3) ? 2'd1 : bfi_cfg;
 always @(posedge clk_pixel) begin
     bfi_cfg_s <= video_config[21:20];
     bfi_cfg <= bfi_cfg_s;
@@ -212,7 +211,7 @@ always @(posedge clk_pixel) begin
         if (bfi_ins && pause_s2) begin
             rd_bank <= wr_bank_s2;
             rel_tgl <= ~rel_tgl;
-            if (bfi_mode_eff != 2'd0) begin
+            if (bfi_cfg != 2'd0) begin
                 if (bfi_swap_cnt == BFI_SWAP_FRAMES - 1) begin
                     bfi_swap_cnt <= 11'd0;
                     bfi_swap_pending <= 1'b1;
@@ -409,29 +408,62 @@ wire [23:0] pal = {mem_portB_rdata[COLOR_BITS*2 +: COLOR_BITS], {(8-COLOR_BITS){
                    mem_portB_rdata[COLOR_BITS   +: COLOR_BITS], {(8-COLOR_BITS){1'b0}},
                    mem_portB_rdata[0            +: COLOR_BITS], {(8-COLOR_BITS){1'b0}}};    // RGB4 to RGB8
 `ifdef HZ120
-// In an inserted BFI refresh the whole picture (border included) is black or
-// half brightness. The menu overlay is exempt, so the menu stays steady.
+// Mode 2-3 (Lottes-style brightness-preserving BFI): in linear light each
+// pixel's content-frame budget (2x its value, gain 1.0: unchanged average
+// brightness, cf. the Blur Busters / Lottes CRT beam simulator at 2 subframes)
+// is carried as HI = min(1, budget) on one refresh and LO = the remainder on
+// the other, through the precomputed BFI_HI/LO tables below (exact sRGB
+// piecewise pair, GAMMA=2.4; worst average-light error 0.37 % of full
+// white, see tools/bfi_lottes.py). Dark and mid pixels (v <= 0.5) land
+// wholly in one refresh, i.e. full 50 % clarity; only bright pixels spill
+// over. Mode 2 shows HI on every lit refresh (global parity); mode 3 flips
+// the parity per screen half (top rows HI on lit refreshes, bottom rows HI
+// on inserted ones), so the 60 Hz flicker has no whole-frame flash, at the
+// same per-pixel brightness and clarity. Refresh pairs stay complementary
+// and every pixel alternates HI/LO, so the phase swap above still averages
+// LCD DC exactly as in mode 1.
+// Credit: Mark Rejhon (Blur Busters) & Timothy Lottes (MIT, Dec 2024).
+localparam [9:0] BEAM_SPLIT = 10'd240;  // mode-3 half split (top/bottom)
+reg [7:0] BFI_HI [0:15];
+reg [7:0] BFI_LO [0:15];
+localparam [23:0] BORDER_HI = 24'h454545;
+localparam [23:0] BORDER_LO = 24'h000000;
+// In an inserted BFI refresh the whole picture (border included) is black
+// (mode 1) or the HI/LO complement (modes 2-3). The menu overlay is exempt,
+// so the menu stays steady.
+wire bfi_lottes = (bfi_cfg == 2'd2) | (bfi_cfg == 2'd3);
 wire bfi_eff_ins = bfi_ins ^ bfi_phase;
-wire bfi_dark = bfi_eff_ins & (bfi_mode_eff != 2'd0) & ~overlay;
+wire show_hi = ~bfi_eff_ins ^ ((bfi_cfg == 2'd3) & (cy >= BEAM_SPLIT));
+wire bfi_dark = bfi_eff_ins & (bfi_cfg == 2'd1) & ~overlay;
 reg [23:0] rgb_norm;
+reg [23:0] rgb_hi, rgb_lo;
 always @* begin
     if (active & sl_show) begin
         if (overlay)
             rgb_norm = {overlay_color[4:0],3'b0,overlay_color[9:5],3'b0,overlay_color[14:10],3'b0};       // BGR5 to RGB8
         else
             rgb_norm = pal;
-    end else
+        rgb_hi = overlay ? rgb_norm :
+            {BFI_HI[pal[23:20]], BFI_HI[pal[15:12]], BFI_HI[pal[7:4]]};
+        rgb_lo = overlay ? rgb_norm :
+            {BFI_LO[pal[23:20]], BFI_LO[pal[15:12]], BFI_LO[pal[7:4]]};
+    end else begin
         rgb_norm = 24'h303030;
+        rgb_hi = BORDER_HI;
+        rgb_lo = BORDER_LO;
+    end
 end
 always @(posedge clk_pixel) begin
-    if (!bfi_dark)
+    if (bfi_lottes & ~overlay)
+        rgb_pre <= show_hi ? rgb_hi : rgb_lo;
+    else if (!bfi_dark)
         rgb_pre <= rgb_norm;
-    else if (bfi_mode_eff == 2'd1)
-        rgb_pre <= 24'h000000;
     else
-        rgb_pre <= {1'b0, rgb_norm[23:17], 1'b0, rgb_norm[15:9], 1'b0, rgb_norm[7:1]};
-    pic_pre <= active & sl_show & ~overlay & ~bfi_dark;
-    dark_pre <= active & sl_show & ~overlay & sl_dark & ~bfi_dark;
+        rgb_pre <= 24'h000000;      // black inserted refresh (mode 1)
+    // Lottes modes carry real picture data on both refreshes, so both get
+    // the same colour/scanline processing downstream (unlike black BFI).
+    pic_pre <= active & sl_show & ~overlay & (~bfi_dark | bfi_lottes);
+    dark_pre <= active & sl_show & ~overlay & sl_dark & (~bfi_dark | bfi_lottes);
 end
 `else
 always @(posedge clk_pixel) begin
@@ -516,5 +548,61 @@ ELVDS_OBUF tmds_bufds [3:0] (
     .O({tmds_clk_p, tmds_d_p}),
     .OB({tmds_clk_n, tmds_d_n})
 );
+
+`ifdef HZ120
+// BEGIN Lottes tables (tools/bfi_lottes.py, sRGB GAMMA=2.4).
+// Per channel nibble: HI = lit-refresh value, LO = remainder refresh.
+// [0] 00 -> HI 00 LO 00
+// [1] 10 -> HI 1a LO 00
+// [2] 20 -> HI 2f LO 00
+// [3] 30 -> HI 45 LO 00
+// [4] 40 -> HI 5a LO 00
+// [5] 50 -> HI 6f LO 00
+// [6] 60 -> HI 85 LO 00
+// [7] 70 -> HI 9a LO 00
+// [8] 80 -> HI b0 LO 00
+// [9] 90 -> HI c5 LO 00
+// [A] a0 -> HI da LO 00
+// [B] b0 -> HI f0 LO 00
+// [C] c0 -> HI ff LO 42
+// [D] d0 -> HI ff LO 8c
+// [E] e0 -> HI ff LO ba
+// [F] f0 -> HI ff LO e0
+// HI table (lit refresh), indexed by channel nibble:
+assign BFI_HI[0] = 8'h00;
+assign BFI_HI[1] = 8'h1a;
+assign BFI_HI[2] = 8'h2f;
+assign BFI_HI[3] = 8'h45;
+assign BFI_HI[4] = 8'h5a;
+assign BFI_HI[5] = 8'h6f;
+assign BFI_HI[6] = 8'h85;
+assign BFI_HI[7] = 8'h9a;
+assign BFI_HI[8] = 8'hb0;
+assign BFI_HI[9] = 8'hc5;
+assign BFI_HI[10] = 8'hda;
+assign BFI_HI[11] = 8'hf0;
+assign BFI_HI[12] = 8'hff;
+assign BFI_HI[13] = 8'hff;
+assign BFI_HI[14] = 8'hff;
+assign BFI_HI[15] = 8'hff;
+// LO table (remainder refresh), indexed by channel nibble:
+assign BFI_LO[0] = 8'h00;
+assign BFI_LO[1] = 8'h00;
+assign BFI_LO[2] = 8'h00;
+assign BFI_LO[3] = 8'h00;
+assign BFI_LO[4] = 8'h00;
+assign BFI_LO[5] = 8'h00;
+assign BFI_LO[6] = 8'h00;
+assign BFI_LO[7] = 8'h00;
+assign BFI_LO[8] = 8'h00;
+assign BFI_LO[9] = 8'h00;
+assign BFI_LO[10] = 8'h00;
+assign BFI_LO[11] = 8'h00;
+assign BFI_LO[12] = 8'h42;
+assign BFI_LO[13] = 8'h8c;
+assign BFI_LO[14] = 8'hba;
+assign BFI_LO[15] = 8'he0;
+// border 303030 -> HI 24'h454545 LO 24'h000000
+`endif
 
 endmodule
