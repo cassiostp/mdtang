@@ -438,7 +438,8 @@ framebuffer #(
     .ce_pix(ce_pix & (interlace_any | hsync_seen)),
 `else
     .ce_pix(ce_pix & hsync_seen),
-`endif .r(red), .g(green), .b(blue), .x(x), .y(y), 
+`endif
+    .r(red), .g(green), .b(blue), .x(x), .y(y),
     .interlace(interlace_any), .double_res(interlace_dres), .field(field),
     .width(resolution[0] ? 320 : 256), .height(resolution[1] ? 240 : 224),      // resolution: 0: 256x224, 1: 320x224, 2: 256x240, 3: 320x240
     .audio_left(pause_menu ? 16'd0 : audio_left), .audio_right(pause_menu ? 16'd0 : audio_right),    // silent while paused
