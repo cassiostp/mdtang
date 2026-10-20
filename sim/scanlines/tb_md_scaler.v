@@ -7,8 +7,10 @@
 // frame against the model of src/scanlines.v: which source line it shows, border rows,
 // dark rows and the darkened colour; the horizontal extent of the picture; and the row
 // where the core is released to start a frame (hdmi_first_line).
-// The hz120 variant additionally checks the BFI modes (video_config[21:20]), the
-// overlay exemption, and dumps example frames (Full/Integer, scanlines on/off,
+// The hz120 variant additionally checks the BFI modes (video_config[21:20]:
+// off, black, and the Lottes bright/beam pair with exact per-pixel checks
+// against sim/scanlines/bfi_lottes.hex, verified against tools/bfi_lottes.py),
+// the overlay exemption, and dumps example frames (Full/Integer, scanlines on/off,
 // menu open or not) to frames/.
 // Fails with $fatal on the first mismatch.
 // Variant: compile with -DHZ120 -I ../../src/variant/hz120 for the 480p120 build,
@@ -68,6 +70,91 @@ module tb_md_scaler;
     end
 
     localparam BORDER = 24'h303030;
+
+`ifdef HZ120
+    // Modes 2/3 (Lottes HI/LO) exact checks: forward table from
+    // bfi_lottes.hex ("HHLL" per input code), three consecutive captured
+    // frames (static stimulus: complements adjacent, identical 2 apart).
+    reg [15:0] HEXRAW [0:255];
+    reg [7:0] THI [0:255];
+    reg [7:0] TLO [0:255];
+    reg [23:0] imgA [0:FW*FH-1];
+    reg [23:0] imgB [0:FW*FH-1];
+    reg [23:0] imgC [0:FW*FH-1];
+    initial begin : load_hex
+        integer ci;
+        $readmemh("bfi_lottes.hex", HEXRAW);
+        for (ci = 0; ci < 256; ci = ci + 1) begin
+            THI[ci] = HEXRAW[ci][15:8]; TLO[ci] = HEXRAW[ci][7:0];
+        end
+    end
+
+    // check_lottes(mode): imgA/imgB must be exact complements through the
+    // hex table on every row (centre column x=360: picture and border rows
+    // alike), imgA/imgC bit-identical (same parity, static stimulus).
+    // Mode 2 carries HI on the same frame for every row; mode 3 flips it
+    // per half (top rows cy<240 vs bottom rows).
+    task check_lottes(input [1:0] mode);
+        integer r, k, c, side_top, side_bot, side;
+        reg [23:0] a, b;
+        reg [7:0] ca, cb, mx, mn;
+        reg ok;
+        begin
+            side_top = -1; side_bot = -1;
+            for (r = 0; r < FH; r = r + 1) begin
+                a = imgA[r * FW + 360]; b = imgB[r * FW + 360];
+                for (k = 0; k < 3; k = k + 1) begin
+                    ca = (a >> (8 * k)) & 8'hff;
+                    cb = (b >> (8 * k)) & 8'hff;
+                    mx = ca > cb ? ca : cb;
+                    mn = ca < cb ? ca : cb;
+                    ok = 0;
+                    for (c = 0; c < 256; c = c + 1)
+                        if (THI[c] == mx && TLO[c] == mn) ok = 1;
+                    if (!ok) begin
+                        $display("FAIL: mode-%0d row %0d ch %0d %h/%h not a table pair", mode, r, k, ca, cb);
+                        $fatal(1, "tb_md_scaler: FAIL");
+                    end
+                    if (mx != mn) begin
+                        side = (ca == mx) ? 1 : 0;
+                        if (r < 240) begin
+                            if (side_top < 0) side_top = side;
+                            else if (side_top != side) begin
+                                $display("FAIL: mode-%0d HI side flips mid top half at row %0d", mode, r);
+                                $fatal(1, "tb_md_scaler: FAIL");
+                            end
+                        end else begin
+                            if (side_bot < 0) side_bot = side;
+                            else if (side_bot != side) begin
+                                $display("FAIL: mode-%0d HI side flips mid bottom half at row %0d", mode, r);
+                                $fatal(1, "tb_md_scaler: FAIL");
+                            end
+                        end
+                    end
+                end
+            end
+            if (side_top < 0 || side_bot < 0) begin
+                $display("FAIL: mode-%0d frames have no discriminating row (all HI==LO)", mode);
+                $fatal(1, "tb_md_scaler: FAIL");
+            end
+            if (mode == 2 && side_top != side_bot) begin
+                $display("FAIL: mode-2 top/bottom HI sides differ (%0d/%0d)", side_top, side_bot);
+                $fatal(1, "tb_md_scaler: FAIL");
+            end
+            if (mode == 3 && side_top == side_bot) begin
+                $display("FAIL: mode-3 top/bottom HI sides agree (%0d)", side_top);
+                $fatal(1, "tb_md_scaler: FAIL");
+            end
+            for (r = 0; r < FH; r = r + 1) begin
+                if (imgA[r * FW + 360] !== imgC[r * FW + 360]) begin
+                    $display("FAIL: mode-%0d row %0d %h != same-parity frame %h", mode, r, imgA[r * FW + 360], imgC[r * FW + 360]);
+                    $fatal(1, "tb_md_scaler: FAIL");
+                end
+            end
+            $display("framebuffer BFI mode %0d bright/beam exact (480 rows, complements + parity): ok", mode);
+        end
+    endtask
+`endif
 
     // source picture: line l has colour src_color(l) (RGB4), or, when by_column is
     // set, column c has colour col_color(c)
@@ -359,10 +446,12 @@ module tb_md_scaler;
         columns(0, 0); columns(0, 1); columns(1, 0);
 `ifdef HZ120
         // BFI: video_config[21:20]. Off shows the frame twice; black blanks
-        // every other refresh; dim halves it; 3 is treated as black. The
+        // every other refresh; bright/beam show the Lottes HI/LO pair with
+        // global (mode 2) or complementary-half (mode 3) parity. The
         // overlay stays lit on both refreshes.
         begin : bfi
             reg [23:0] a, b, lit;
+            integer n;
             sl_on = 0; sl_out = 0; ov = 0; W = 320; H = 224; by_column = 0;
             vcfg = 32'd0;
             settle; settle;
@@ -383,25 +472,22 @@ module tb_md_scaler;
                 $display("FAIL: BFI black frames %h %h, lit %h", a, b, lit);
                 $fatal(1, "tb_md_scaler: FAIL");
             end
-            vcfg = 32'd3 << 20;                    // mode 3, same as black
+            vcfg = 32'd2 << 20;                    // mode 2, bright
             settle; settle;
-            a = img[200 * FW + 360];
+            for (n = 0; n < FW * FH; n = n + 1) imgA[n] = img[n];
             settle;
-            b = img[200 * FW + 360];
-            if (!((a === lit && b === 24'h0) || (b === lit && a === 24'h0))) begin
-                $display("FAIL: BFI rolling-as-black frames %h %h, lit %h", a, b, lit);
-                $fatal(1, "tb_md_scaler: FAIL");
-            end
-            vcfg = 32'd2 << 20;                    // mode 2, dim
+            for (n = 0; n < FW * FH; n = n + 1) imgB[n] = img[n];
+            settle;
+            for (n = 0; n < FW * FH; n = n + 1) imgC[n] = img[n];
+            check_lottes(2);
+            vcfg = 32'd3 << 20;                    // mode 3, beam
             settle; settle;
-            a = img[200 * FW + 360];
+            for (n = 0; n < FW * FH; n = n + 1) imgA[n] = img[n];
             settle;
-            b = img[200 * FW + 360];
-            if (!((a === lit && b === {1'b0, lit[23:17], 1'b0, lit[15:9], 1'b0, lit[7:1]}) ||
-                  (b === lit && a === {1'b0, lit[23:17], 1'b0, lit[15:9], 1'b0, lit[7:1]}))) begin
-                $display("FAIL: BFI dim frames %h %h, lit %h", a, b, lit);
-                $fatal(1, "tb_md_scaler: FAIL");
-            end
+            for (n = 0; n < FW * FH; n = n + 1) imgB[n] = img[n];
+            settle;
+            for (n = 0; n < FW * FH; n = n + 1) imgC[n] = img[n];
+            check_lottes(3);
             vcfg = 32'd1 << 20;
             ov = 1;
             settle; settle;
