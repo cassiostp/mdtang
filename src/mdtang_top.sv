@@ -129,6 +129,7 @@ end
 reg        md_on;
 wire [1:0] resolution;          // {V30, H40}, V30: verticle 240 vs 224, H40: horizontal 320 vs 256
 wire ce_pix, hblank, vblank, hsync;
+wire interlace_any, interlace_dres, field;
 wire       pause_core;
 wire [31:0] core_config;        // from iosys
 wire [31:0] video_config;       // from iosys
@@ -211,7 +212,7 @@ system megadrive (
     .GG_RESET('0), .GG_EN('0), .GG_CODE('0), .GG_AVAILABLE(),
     .BRAM_A(bram_a), .BRAM_DI(bram_di), .BRAM_DO(bram_do), .BRAM_WE(bram_we), .BRAM_CHANGE(sv_core_we),
     .RED(red), .GREEN(green), .BLUE(blue), .VS(), .HS(hsync), .HBL(hblank), .VBL(vblank), .CE_PIX(ce_pix), 
-    .BORDER('0), .CRAM_DOTS('0), .INTERLACE(), .FIELD(), .RESOLUTION(resolution),
+    .BORDER('0), .CRAM_DOTS('0), .INTERLACE(interlace_dres), .INTERLACE_ANY(interlace_any), .FIELD(field), .RESOLUTION(resolution),
     .J3BUT('0), .JOY_1(joy1), .JOY_2(joy2), .JOY_3(), .JOY_4(), .JOY_5(), .MULTITAP('0),
     .MOUSE('0), .MOUSE_OPT('0), .GUN_OPT('0), .GUN_TYPE('0), .GUN_SENSOR('0), .GUN_A('0),
     .GUN_B('0), .GUN_C('0), .GUN_START('0),
@@ -406,6 +407,7 @@ framebuffer #(
 ) fb (
     .clk(clk_sys), .resetn(~reset), .clk_pixel(hclk), .clk_5x_pixel(hclk5),
     .ce_pix(ce_pix & hsync_seen), .r(red), .g(green), .b(blue), .x(x), .y(y), 
+    .interlace(interlace_any), .double_res(interlace_dres), .field(field),
     .width(resolution[0] ? 320 : 256), .height(resolution[1] ? 240 : 224),      // resolution: 0: 256x224, 1: 320x224, 2: 256x240, 3: 320x240
     .audio_left(pause_menu ? 16'd0 : audio_left), .audio_right(pause_menu ? 16'd0 : audio_right),    // silent while paused
     .overlay(overlay), .overlay_x(overlay_x), .overlay_y(overlay_y), .overlay_color(overlay_color),

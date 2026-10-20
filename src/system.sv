@@ -94,6 +94,7 @@ module system
 	input         CRAM_DOTS,
 
 	output        INTERLACE,
+	output        INTERLACE_ANY,
 	output        FIELD,
 	output  [1:0] RESOLUTION,
 
@@ -518,6 +519,7 @@ vdp vdp
 
 	.FIELD_OUT(FIELD),
 	.INTERLACE(INTERLACE),
+	.INTERLACE_ANY(INTERLACE_ANY),
 	.RESOLUTION(RESOLUTION),
 
 	.PAL(PAL),

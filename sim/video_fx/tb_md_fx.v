@@ -45,7 +45,7 @@ module tb_md_fx;
         .clk(clk), .resetn(1'b1), .clk_pixel(clk_pixel), .clk_5x_pixel(1'b0),
         .ce_pix(1'b0), .r(4'd0), .g(4'd0), .b(4'd0), .x(9'd0), .y(8'd0),
         .width(W), .height(H),
-        .std_timing(1'b0),
+        .interlace(1'b0), .double_res(1'b0), .field(1'b0), .std_timing(1'b0),
         .overlay(ov), .overlay_x(ovx), .overlay_y(ovy), .overlay_color(ovc),
         .scanlines(sl_on), .sl_darkness(sl_dark), .sl_thick(sl_thick), .sl_out(sl_out),
         .video_config(vcfg),
@@ -58,7 +58,7 @@ module tb_md_fx;
     reg [11:0] pix;
     initial begin
         #1;
-        dut.pause_core = 1'b0;                  // the VDP side is not played here
+        dut.pause_prog = 1'b0;                  // the VDP side is not played here
         h = 32'h7654321;
         for (i = 0; i < 320 * 32; i = i + 1) begin
             h = h * 1664525 + 1013904223;

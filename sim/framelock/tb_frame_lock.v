@@ -177,7 +177,7 @@ module tb_frame_lock;
         .clk(clk), .resetn(1'b1), .clk_pixel(clk_pixel), .clk_5x_pixel(1'b0),
         .ce_pix(ce_pix & hsync_seen), .r(pr), .g(pg), .b(pb), .x(x), .y(y),
         .width(W), .height(H), .pause_core(pause_core),
-        .std_timing(1'b0),
+        .interlace(1'b0), .double_res(1'b0), .field(1'b0), .std_timing(1'b0),
         .overlay(1'b0), .overlay_x(ovx), .overlay_y(ovy), .overlay_color(15'd0),
         .scanlines(1'b0), .sl_darkness(2'd0), .sl_thick(1'b0), .sl_out(sl_out_tb),
         .video_config(vcfg),
@@ -186,7 +186,7 @@ module tb_frame_lock;
     );
     initial begin
         #1;
-        dut.pause_core = 1'b0;
+        dut.pause_prog = 1'b0;
         // the HDMI audio divider has no reset (hardware recovers in < 1 ms);
         // give the sim a clean start so the audio-word repeat check sees edges
         dut.clk_audio = 1'b0;
@@ -558,7 +558,7 @@ module tb_frame_lock;
         wait_hdmi_frames(2);
         core_reset = 0;
         #1;
-        dut.pause_core = 1'b0;
+        dut.pause_prog = 1'b0;
         await_lock(relock_reset);
         $display("lock %0dx%0d post-reset: re-locked after %0d HDMI frames", W, H, relock_reset);
         checking = 1;

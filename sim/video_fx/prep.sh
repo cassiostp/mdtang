@@ -25,7 +25,7 @@ git show $FXBASE:src/framebuffer_sync.sv | sed -e 's/^module framebuffer #(/modu
 # std_timing/NATIVE_FRAME_WIDTH; give their hdmi instance both explicitly
 # (an unconnected std_timing is X with the shared hdmi.sv select).
 sed -i -e 's/\.START_Y(0) )/.START_Y(0), .NATIVE_FRAME_WIDTH(1652) )/' \
-    -e "s/hdmi( \.clk_pixel_x5/hdmi( .std_timing(1'b0), .clk_pixel_x5/" \
+    -e "s/hdmi( \.clk_pixel_x5/hdmi( .std_timing(1'b0), .interlace(1'b0), .clk_pixel_x5/" \
     build/framebuffer_sync_base.sv build/framebuffer_sync_fx.sv
 grep -q "hdmi( .std_timing(1'b0)" build/framebuffer_sync_base.sv
 grep -q "hdmi( .std_timing(1'b0)" build/framebuffer_sync_fx.sv

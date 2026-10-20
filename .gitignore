@@ -9,3 +9,9 @@ sim/*/out_*
 sim/video_fx/build/
 sim/video_fx/md_*.log
 sim/video_fx/vec_*.hex
+
+# Local video simulation products (never commit ROM-derived frames).
+sim/*/build/
+sim/scanlines/frames/
+core
+core.*

@@ -5,27 +5,18 @@
 // then upscales and output the video over HDMI.
 // The video aspect ratio is 4:3, with the video centered on the screen.
 //
-// Standard variant: 16 lines of the video are buffered and the picture is
-// shown in 720p, scaled 256/320 x 224/240 to 960x720 (4:3); see the Video
-// comment below for the scanline geometry. Nearest neighbour.
+// Progressive video keeps the original 720p short-buffer or 480p120 double
+// frame-buffer path. On 138K, interlace uses three 320x240 RGB4 field banks:
+// HDMI owns two fields and the VDP owns the third. A field is published only
+// at a frame boundary, then the discarded parity bank is returned to the VDP.
+// Mode 2 weaves 448/480 rows. Integer scale is 1x vertically, centred; Full
+// fills the normal 4:3 viewport. Scanlines alternate output rows at 1x.
 //
-// HZ120 variant (480p120 build): the Mega Drive picture is stored in a
-// double-buffered full frame (320 x 240, 12-bit) and each console frame is
-// read out twice, once per HDMI refresh. Black-frame insertion is
-// video_config[21:20]:
-//   0 off (both refreshes lit), 1 the second refresh black, 2 the second
-//   refresh at half brightness, 3 same as 1 (the rolling-scan prototype is
-//   NES-only). The menu overlay is lit on every refresh. Modes 1-3 swap
-//   which refresh is the dark one every ~30 s so an LCD's frame polarity
-//   does not see a DC bias.
-// Integer 2x, centred in the 720x480 frame: H32 is 512 wide, H40 is 640;
-// 224 lines sit on rows 16..463 and 240 lines fill the frame. Full scale
-// fills the 4:3 frame (640x480), the same aspect as the 60 Hz Full scale.
-//
-// This is different from framebuffer.sv in that it requires the input video
-// to be synchronized to HDMI. This allows the module use much less BRAM space
-// compared to a full framebuffer (standard variant; the hz120 variant keeps
-// a full double frame instead, in BSRAM).
+// 120 Hz BFI: video_config[21:20] selects off / black / half brightness /
+// black. The menu is exempt. The dark phase swaps about every 30 seconds.
+// Interlace changes the HDMI cadence to twice the native field rate, and
+// keeps both field banks unchanged through the repeated/BFI refresh.
+// 60K retains the progressive-sized field presentation and original rate.
 `include "variant.vh"
 module framebuffer #(
     parameter WIDTH = 320,          // max frame width (<=1280)
@@ -47,7 +38,7 @@ module framebuffer #(
     input [10:0] width,             // frame width
     input [9:0] height,             // frame height
 
-    output reg pause_core,          // sync mechanism: input video should be a bit faster (e.g. 0.x%)
+    output wire pause_core,          // sync mechanism: input video should be a bit faster (e.g. 0.x%)
                                     // than HDMI. It should wait after line 0 is rendered
                                     // and wait for sync_line1 to continue rendering.
 
@@ -64,6 +55,9 @@ module framebuffer #(
     input [31:0] video_config,      // colour controls and the CRT mask, see video_fx.v (the LCD grid is unused;
                                     // the hz120 variant also reads BFI from video_config[21:20], see below)
 
+    input interlace,                // mode 1 or 2, source clock domain
+    input double_res,               // mode 2: weave the two fields
+    input field,                    // parity of the incoming mode-2 field
     input std_timing,               // 1: standard timing (60.00 Hz 720p / 120 Hz 480p120), 0: native console rate (see hdmi.sv)
 
     input [15:0] audio_left,        // audio sample
@@ -82,6 +76,7 @@ localparam CLKFRQ = 54000;
 localparam CLKFRQ = 74250;
 `endif
 
+reg pause_prog;
 // video stuff
 wire [10:0] cx /* xsynthesis syn_keep=1 */;
 wire [9:0] cy  /* xsynthesis syn_keep=1 */;
@@ -96,14 +91,19 @@ localparam FB_W = 320;
 localparam FB_H = 240;
 localparam FB_FRAME = FB_W * FB_H;          // 76800
 localparam COLOR_WIDTH = COLOR_BITS * 3;
+`ifdef MD_INTERLACE
+reg [COLOR_WIDTH-1:0] mem [0:3*FB_FRAME-1];
+`else
 reg [COLOR_WIDTH-1:0] mem [0:2*FB_FRAME-1];
+`endif
 reg mem_portA_we;
 reg wr_bank = 1'b0;
 reg rd_bank = 1'b0;
 reg rel_tgl = 1'b0;
 // Address of the pixel being written. Combinational so a bench that samples
 // it on the write clock sees this pixel, not the previous one.
-wire [17:0] mem_portA_addr = (wr_bank ? FB_FRAME[17:0] : 18'd0) + y * 18'd320 + {9'd0, x};
+wire [17:0] prog_addr_a = (wr_bank ? FB_FRAME[17:0] : 18'd0) + y * 18'd320 + {9'd0, x};
+wire [17:0] mem_portA_addr = ilace_on ? ilace_addr_a : prog_addr_a;
 
 wire [17:0] mem_portB_addr;
 reg [COLOR_WIDTH-1:0] mem_portB_rdata;
@@ -113,7 +113,7 @@ reg ce_pix_r;
 reg [7:0] y_r = 8'd0;
 always @(posedge clk) begin
     ce_pix_r <= ce_pix;
-    if (ce_pix & ~ce_pix_r && y < FB_H && {1'b0, x} < FB_W) begin
+    if (ce_pix & ~ce_pix_r && (ilace_on ? (y != 0 && y <= height && x < width) : (y < FB_H && {1'b0, x} < FB_W))) begin
         mem[mem_portA_addr] <= {r, g, b};
         mem_portA_we <= 1'b1;
     end else
@@ -126,21 +126,122 @@ end
 localparam FB_DEPTH = WIDTH * 32;           // buffer 16 lines
 localparam COLOR_WIDTH = COLOR_BITS * 3;
 localparam FB_AWIDTH = $clog2(FB_DEPTH);
+`ifdef MD_INTERLACE
+reg [COLOR_WIDTH-1:0] mem [0:3*320*240-1];
+localparam MEM_AWIDTH = 18;
+`else
 reg [COLOR_WIDTH-1:0] mem [0:FB_DEPTH-1];
-reg [FB_AWIDTH-1:0] mem_portA_addr;
+localparam MEM_AWIDTH = FB_AWIDTH;
+`endif
+wire [MEM_AWIDTH-1:0] mem_portA_addr;
 reg mem_portA_we;
 
-wire [FB_AWIDTH-1:0] mem_portB_addr;
+wire [MEM_AWIDTH-1:0] mem_portB_addr;
 reg [COLOR_WIDTH-1:0] mem_portB_rdata;
 
 // BRAM port A read/write
 reg ce_pix_r, hblank_r;
-assign mem_portA_addr = y[4:0] * WIDTH + x;
+assign mem_portA_addr = ilace_on ? ilace_addr_a : y[4:0] * WIDTH + x;
 always @(posedge clk) begin
     ce_pix_r <= ce_pix;
-    if (ce_pix & ~ce_pix_r) 
+    if (ce_pix & ~ce_pix_r && (!ilace_on || (y != 0 && y <= height && x < width)))
         mem[mem_portA_addr] <= {r, g, b};
 end
+`endif
+
+// Three fields are sufficient for a tear-free rolling weave: two are owned
+// by HDMI (one per parity), the third by the VDP. At a field boundary HDMI
+// takes the completed field and returns the previous bank of that parity.
+// The VDP remains halted until that acknowledgement crosses back. Neither
+// HDMI bank can be written, including the second 120 Hz/BFI refresh.
+`ifdef MD_INTERLACE
+wire ilace_on = interlace;
+reg ilace_s1 = 0, ilace_s2 = 0, ilace_pixel = 0;
+reg dres_s1 = 0, dres_s2 = 0, dres_pixel = 0;
+reg [1:0] ilace_wr_bank = 2;
+reg ilace_wr_par = 0;
+reg ilace_pause = 0;
+reg [7:0] ilace_y_r = 0;
+reg ilace_rel_tgl = 0;
+reg [1:0] ilace_return_bank = 0;
+reg [2:0] ilace_rel_sync = 0;
+reg ilace_rel_seen = 0;
+reg [1:0] ilace_bank_s1 = 2, ilace_bank_s2 = 2;
+reg ilace_par_s1 = 0, ilace_par_s2 = 0;
+reg ilace_ready_s1 = 0, ilace_ready_s2 = 0;
+reg [1:0] ilace_bank_even = 0, ilace_bank_odd = 1, ilace_bank_last = 0;
+reg [1:0] ilace_valid = 0;
+reg ilace_f0 = 0;
+// y=0 is the partial dummy line after VBL; complete active lines are 1..height.
+wire [17:0] ilace_addr_a = ilace_wr_bank * 18'd76800 + (y - 8'd1) * 18'd320 + x;
+wire [8:0] weave_line;
+wire [1:0] ilace_rd_bank = dres_pixel ? (weave_line[0] ? ilace_bank_odd : ilace_bank_even) : ilace_bank_last;
+wire [7:0] ilace_rd_line = dres_pixel ? weave_line[8:1] : yy_s;
+wire [17:0] ilace_addr_b = ilace_rd_bank * 18'd76800 + ilace_rd_line * 18'd320 + xx;
+wire ilace_ready = dres_pixel ? (&ilace_valid) : (|ilace_valid);
+assign pause_core = ilace_on ? ilace_pause : pause_prog;
+always @(posedge clk) begin
+    ilace_y_r <= y;
+    ilace_rel_sync <= {ilace_rel_sync[1:0], ilace_rel_tgl};
+    ilace_rel_seen <= ilace_rel_sync[2];
+    if (!resetn || !ilace_on) begin
+        ilace_pause <= 0;
+        ilace_wr_bank <= 2;
+        ilace_wr_par <= 0;
+    end else if (ilace_pause && (ilace_rel_sync[2] != ilace_rel_seen)) begin
+        ilace_pause <= 0;
+        ilace_wr_bank <= ilace_return_bank;
+    end else if (!ilace_pause) begin
+        if (y == 1 && x == 0 && ce_pix && !ce_pix_r) ilace_wr_par <= field;
+        if (y == height[7:0] + 8'd1 && ilace_y_r != height[7:0] + 8'd1) ilace_pause <= 1;
+    end
+end
+always @(posedge clk_pixel) begin
+    ilace_s1 <= ilace_on;
+    ilace_s2 <= ilace_s1;
+    dres_s1 <= double_res;
+    dres_s2 <= dres_s1;
+    ilace_ready_s1 <= ilace_pause;
+    ilace_ready_s2 <= ilace_ready_s1;
+    ilace_bank_s1 <= ilace_wr_bank;
+    ilace_bank_s2 <= ilace_bank_s1;
+    ilace_par_s1 <= ilace_wr_par;
+    ilace_par_s2 <= ilace_par_s1;
+    ilace_f0 <= (cy == 0);
+    if (cy == 0 && !ilace_f0) begin
+        ilace_pixel <= ilace_s2;
+        dres_pixel <= dres_s2;
+    end
+    if (!resetn || !ilace_pixel) begin
+        ilace_bank_even <= 0;
+        ilace_bank_odd <= 1;
+        ilace_bank_last <= 0;
+        ilace_valid <= 0;
+    end else if (cy == 0 && !ilace_f0 && ilace_ready_s2
+`ifdef HZ120
+                 && bfi_ins
+`endif
+                ) begin
+        ilace_bank_last <= ilace_bank_s2;
+        ilace_valid[ilace_par_s2] <= 1;
+        if (ilace_par_s2) begin
+            ilace_return_bank <= ilace_bank_odd;
+            ilace_bank_odd <= ilace_bank_s2;
+        end else begin
+            ilace_return_bank <= ilace_bank_even;
+            ilace_bank_even <= ilace_bank_s2;
+        end
+        ilace_rel_tgl <= ~ilace_rel_tgl;
+    end
+end
+`else
+wire ilace_on = 1'b0;
+wire ilace_pixel = 1'b0;
+wire dres_pixel = 1'b0;
+wire ilace_ready = 1'b1;
+// y=0 is the partial dummy line after VBL; complete active lines are 1..height.
+wire [17:0] ilace_addr_a = 0, ilace_addr_b = 0;
+assign pause_core = pause_prog;
 `endif
 
 // BRAM port B read
@@ -166,16 +267,16 @@ always @(posedge clk) begin
     y_r <= y;
     rel_sync <= {rel_sync[1:0], rel_tgl};
     rel_lvl <= rel_sync[2];
-    if (~resetn) begin
-        pause_core <= 1'b0;
+    if (~resetn || ilace_on) begin
+        pause_prog <= 1'b0;
         wr_bank <= 1'b0;
         rel_sync <= 3'b0;
         rel_lvl <= 1'b0;
-    end else if (pause_core && rel_pulse) begin
-        pause_core <= 1'b0;
+    end else if (pause_prog && rel_pulse) begin
+        pause_prog <= 1'b0;
         wr_bank <= ~wr_bank;
-    end else if (!pause_core && y == height[7:0] && y_r != height[7:0])
-        pause_core <= 1'b1;                 // picture just finished: hold it for HDMI
+    end else if (!pause_prog && y == height[7:0] && y_r != height[7:0])
+        pause_prog <= 1'b1;                 // picture just finished: hold it for HDMI
 end
 
 // BFI. bfi_ins toggles every HDMI frame; the dark refresh is bfi_ins ^ phase.
@@ -195,7 +296,7 @@ wire [1:0] bfi_mode_eff = (bfi_cfg == 2'd3) ? 2'd1 : bfi_cfg;
 always @(posedge clk_pixel) begin
     bfi_cfg_s <= video_config[21:20];
     bfi_cfg <= bfi_cfg_s;
-    pause_s1 <= pause_core;
+    pause_s1 <= pause_prog;
     pause_s2 <= pause_s1;
     wr_bank_s1 <= wr_bank;
     wr_bank_s2 <= wr_bank_s1;
@@ -236,12 +337,15 @@ wire [9:0] sl_pic_top;          // first row of the picture, from scanlines.v
 always @(posedge clk) begin
     hdmi_first_line_r <= hdmi_first_line;
     hdmi_first_line_rr <= hdmi_first_line_r;
-    if (~sync_done) begin
-        if (~pause_core) begin
+    if (ilace_on) begin
+        pause_prog <= 1'b0;
+        sync_done <= 1'b0;
+    end else if (~sync_done) begin
+        if (~pause_prog) begin
             if (y == 8'd1 && x == 0)                       // halt on the core starting line 1
-                pause_core <= 1'b1;
-        end else if (hdmi_first_line_rr && pause_core) begin     // resume when HDMI start line 0
-            pause_core <= 1'b0;
+                pause_prog <= 1'b1;
+        end else if (hdmi_first_line_rr && pause_prog) begin     // resume when HDMI start line 0
+            pause_prog <= 1'b0;
             sync_done <= 1'b1;
         end
     end
@@ -316,6 +420,42 @@ sl_rows sl (
 `endif
     .geom(sl_geom), .pic_top(sl_pic_top), .yy(sl_yy), .show(sl_show), .dark(sl_dark), .last(), .darkness(sl_dk)
 );
+`ifdef MD_INTERLACE
+`ifdef HZ120
+localparam WEAVE_V = 480;
+wire [9:0] weave_top = height >= 232 ? 10'd0 : 10'd16;
+`else
+localparam WEAVE_V = 720;
+wire [9:0] weave_top = height >= 232 ? 10'd120 : 10'd136;
+`endif
+reg [8:0] weave_yy = 0;
+reg [10:0] weave_ycnt = 0;
+wire [9:0] weave_height = {height[8:0], 1'b0};
+assign weave_line = sl_geom ? (cy - weave_top) : weave_yy;
+always @(posedge clk_pixel) begin
+    if (cy[0] != cy_r[0]) begin
+        if (weave_ycnt + weave_height >= WEAVE_V) begin
+            weave_ycnt <= weave_ycnt + weave_height - WEAVE_V;
+            if (weave_yy < weave_height - 1) weave_yy <= weave_yy + 1;
+        end else weave_ycnt <= weave_ycnt + weave_height;
+    end
+    if (cy == 0) begin weave_yy <= 0; weave_ycnt <= 0; end
+end
+// At 1x there is no spare duplicate row. Scanlines alternate output rows;
+// thin and thick coincide, as they do on the progressive 2x 120 Hz output.
+wire weave_show = !sl_geom || (cy >= weave_top && cy < weave_top + weave_height);
+wire pic_show = (dres_pixel && !overlay ? weave_show : sl_show) && (!ilace_pixel || ilace_ready || overlay);
+reg weave_scan_a = 0, weave_scan_b = 0, weave_scan = 0;
+always @(posedge clk_pixel) begin
+    weave_scan_a <= scanlines;
+    weave_scan_b <= weave_scan_a;
+    if (cy == 0) weave_scan <= weave_scan_b;
+end
+wire pic_dark = dres_pixel && !overlay ? (weave_scan && cy[0]) : sl_dark;
+`else
+wire pic_show = sl_show;
+wire pic_dark = sl_dark;
+`endif
 always @(posedge clk_pixel) yy_s <= sl_geom ? sl_yy : yy;
 
 assign overlay_x = xx[7:0];
@@ -328,15 +468,16 @@ wire [11:0] XSTART = (12'd720 - XSIZE) >> 1;
 wire [11:0] XSTOP  = (12'd720 + XSIZE) >> 1;
 
 // the shown line comes from the bank HDMI is showing
-assign mem_portB_addr = (rd_bank ? FB_FRAME[17:0] : 18'd0) + yy_s * 18'd320 + {9'd0, xx};
+assign mem_portB_addr = ilace_pixel ? ilace_addr_b : (rd_bank ? FB_FRAME[17:0] : 18'd0) + yy_s * 18'd320 + {9'd0, xx};
 `else
 // 4:3 on 720 rows, 4:3 on 672 rows
-wire [11:0] XSIZE  = (sl_geom && sl_pic_top != 10'd0) ? 12'd896 : 12'd960;
+wire [11:0] XSIZE  = dres_pixel && sl_geom && !overlay ? (height >= 232 ? 12'd640 : 12'd597) :
+                     (sl_geom && sl_pic_top != 10'd0) ? 12'd896 : 12'd960;
 wire [11:0] XSTART = (12'd1280 - XSIZE) >> 1;
 wire [11:0] XSTOP  = (12'd1280 + XSIZE) >> 1;
 
 // the line buffer is read once per source column: the line to show
-assign mem_portB_addr = yy_s[4:0] * WIDTH + xx;
+assign mem_portB_addr = ilace_pixel ? ilace_addr_b : yy_s[4:0] * WIDTH + xx;
 `endif
 
 // address calculation
@@ -415,7 +556,7 @@ wire bfi_eff_ins = bfi_ins ^ bfi_phase;
 wire bfi_dark = bfi_eff_ins & (bfi_mode_eff != 2'd0) & ~overlay;
 reg [23:0] rgb_norm;
 always @* begin
-    if (active & sl_show) begin
+    if (active & pic_show) begin
         if (overlay)
             rgb_norm = {overlay_color[4:0],3'b0,overlay_color[9:5],3'b0,overlay_color[14:10],3'b0};       // BGR5 to RGB8
         else
@@ -430,20 +571,20 @@ always @(posedge clk_pixel) begin
         rgb_pre <= 24'h000000;
     else
         rgb_pre <= {1'b0, rgb_norm[23:17], 1'b0, rgb_norm[15:9], 1'b0, rgb_norm[7:1]};
-    pic_pre <= active & sl_show & ~overlay & ~bfi_dark;
-    dark_pre <= active & sl_show & ~overlay & sl_dark & ~bfi_dark;
+    pic_pre <= active & pic_show & ~overlay & ~bfi_dark;
+    dark_pre <= active & pic_show & ~overlay & pic_dark & ~bfi_dark;
 end
 `else
 always @(posedge clk_pixel) begin
-    if (active & sl_show) begin
+    if (active & pic_show) begin
         if (overlay)
             rgb_pre <= {overlay_color[4:0],3'b0,overlay_color[9:5],3'b0,overlay_color[14:10],3'b0};       // BGR5 to RGB8
         else
             rgb_pre <= pal;
     end else
         rgb_pre <= 24'h303030;
-    pic_pre <= active & sl_show & ~overlay;
-    dark_pre <= active & sl_show & ~overlay & sl_dark;
+    pic_pre <= active & pic_show & ~overlay;
+    dark_pre <= active & pic_show & ~overlay & pic_dark;
 end
 `endif
 
@@ -496,7 +637,7 @@ hdmi #( .VIDEO_ID_CODE(VIDEOID),
         .START_Y(0),
         .NATIVE_FRAME_WIDTH(NATIVE_FRAME_WIDTH) )
 
-hdmi( .std_timing(std_timing),
+hdmi( .std_timing(std_timing), .interlace(ilace_pixel),
         .clk_pixel_x5(clk_5x_pixel), 
         .clk_pixel(clk_pixel), 
         .clk_audio(clk_audio),

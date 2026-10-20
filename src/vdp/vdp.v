@@ -1,3 +1,4 @@
+`include "variant.vh"
 // Copyright (c) 2010 Gregory Estrade (greg@torlus.com)
 // Copyright (c) 2018 Till Harbaum
 // Copyright (c) 2018-2019 Alexey Melnikov
@@ -84,6 +85,7 @@ module vdp(
    output reg       CE_PIX,            // pixel valid
    output reg       FIELD_OUT,
    output           INTERLACE,
+   output           INTERLACE_ANY,
    output [1:0]     RESOLUTION,        // 00 - 256x224, 01 - 256x240, 10 - 320x224, 11 - 320x240
    output reg       HBL,               // HBLANK
    output reg       VBL,               // VBLANK
@@ -2051,7 +2053,12 @@ module vdp(
                           (PAL) ? V_DISP_START_PAL_V28 : 
                           V_DISP_START_NTSC_V28;
    assign V_DISP_HEIGHT = (V30) ? V_DISP_HEIGHT_V30 : V_DISP_HEIGHT_V28;
+`ifdef MD_INTERLACE
+   assign V_TOTAL_HEIGHT = PAL ? (LSM[0] && !FIELD ? 9'd312 : 9'd313)
+                              : (LSM[0] && FIELD ? 9'd263 : 9'd262);
+`else
    assign V_TOTAL_HEIGHT = (PAL) ? PAL_LINES : NTSC_LINES;
+`endif
    assign V_INT_POS     = (V30) ? V_INT_V30 : V_INT_V28;
    
    // COUNTERS AND INTERRUPTS
@@ -2540,6 +2547,7 @@ module vdp(
    assign B = FF_B;
    
    assign INTERLACE = LSM[1] & LSM[0];
+   assign INTERLACE_ANY = LSM[0];
    assign RESOLUTION = {V30, H40};
    
    assign V_DISP_HEIGHT_R = (V30_R) ? V_DISP_HEIGHT_V30 : V_DISP_HEIGHT_V28;

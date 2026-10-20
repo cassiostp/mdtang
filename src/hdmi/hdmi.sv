@@ -84,6 +84,7 @@ module hdmi
     input logic reset,
     // 1: standard 720p timing; 0: native console rate (NATIVE_FRAME_WIDTH)
     input logic std_timing,
+    input logic interlace,
     input logic [23:0] rgb,
     input logic [AUDIO_BIT_WIDTH-1:0] audio_sample_word [1:0],
 
@@ -143,7 +144,14 @@ generate
             end
         4:
         begin
+            `ifdef MD_INTERLACE
+            // 1,241,460 pixel clocks/field: 59.80861244 Hz, +0.127 ppm
+            // relative to 53.693175 MHz / (3420 * 262.5). Sync is unchanged.
+            assign frame_width = !std_timing && interlace ? (cy < 210 ? 1656 : 1655)
+                                                                         : (std_timing ? 1650 : NATIVE_FRAME_WIDTH);
+`else
             assign frame_width = std_timing ? 1650 : NATIVE_FRAME_WIDTH;
+`endif
             assign frame_height = 750;
             assign screen_width = 1280;
             assign screen_height = 720;
@@ -156,7 +164,13 @@ generate
 `ifdef HZ120
         48, 49:  // 480p120 (VIC 48 4:3, VIC 49 16:9): the 480p60 totals at 54 MHz
         begin
+            `ifdef MD_INTERLACE
+            // 451,440 clocks/refresh, two refreshes per interlaced field.
+            assign frame_width = !std_timing && interlace ? (cy < 465 ? 860 : 859)
+                                                                         : (std_timing ? 858 : NATIVE_FRAME_WIDTH);
+`else
             assign frame_width = std_timing ? 858 : NATIVE_FRAME_WIDTH;
+`endif
             assign frame_height = 525;
             assign screen_width = 720;
             assign screen_height = 480;

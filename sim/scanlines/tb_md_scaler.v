@@ -40,13 +40,13 @@ module tb_md_scaler;
         .clk(clk), .resetn(1'b1), .clk_pixel(clk_pixel), .clk_5x_pixel(1'b0),
         .ce_pix(1'b0), .r(4'd0), .g(4'd0), .b(4'd0), .x(9'd0), .y(8'd0),
         .width(W), .height(H), .pause_core(pause_core),
-        .std_timing(1'b0),
+        .interlace(1'b0), .double_res(1'b0), .field(1'b0), .std_timing(1'b0),
         .overlay(ov), .overlay_x(overlay_x), .overlay_y(overlay_y), .overlay_color(overlay_color),
         .scanlines(sl_on), .sl_darkness(sl_dark), .sl_thick(sl_thick), .sl_out(sl_out), .video_config(vcfg),
         .audio_left(16'd0), .audio_right(16'd0),
         .tmds_clk_n(tmds_clk_n), .tmds_clk_p(tmds_clk_p), .tmds_d_n(tmds_d_n), .tmds_d_p(tmds_d_p)
     );
-    initial dut.pause_core = 1'b0;
+    initial dut.pause_prog = 1'b0;
 
     // what the HDMI sink would show: rgb while cx = x + 1
 `ifdef HZ120

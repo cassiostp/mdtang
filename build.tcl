@@ -171,7 +171,9 @@ set_option -top_module mdtang_top
 # script's own location (ci_build.tcl is a copy of build.tcl in the same
 # directory). The src/common entry is the original one and stays first.
 set_option -include_path {"src/common"}
-set_option -include_path "[file dirname [file normalize [info script]]]/src/variant/$variant"
+set video_variant $variant
+if {$dev eq "console60k" || $dev eq "mega60k"} { set video_variant "legacy" }
+set_option -include_path "[file dirname [file normalize [info script]]]/src/variant/$video_variant"
 set_option -verilog_std sysv2017
 set_option -vhdl_std vhd2008
 set_option -ireg_in_iob 1

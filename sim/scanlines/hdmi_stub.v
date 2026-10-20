@@ -18,6 +18,7 @@ module hdmi #(
 ) (
     // 1: standard 720p timing; 0: native console rate (NATIVE_FRAME_WIDTH)
     input         std_timing,
+    input         interlace,
     input         clk_pixel_x5,
     input         clk_pixel,
     input         clk_audio,
@@ -32,8 +33,14 @@ module hdmi #(
     output [9:0]  frame_height
 );
     wire p480 = (VIDEO_ID_CODE == 48 || VIDEO_ID_CODE == 49);
-    wire [10:0] frame_w = p480 ? (std_timing ? 11'd858 : NATIVE_FRAME_WIDTH[10:0])
+    wire [10:0] normal_w = p480 ? (std_timing ? 11'd858 : NATIVE_FRAME_WIDTH[10:0])
                                : (std_timing ? 11'd1650 : NATIVE_FRAME_WIDTH[10:0]);
+    `ifdef MD_INTERLACE
+    wire [10:0] frame_w = !std_timing && interlace ? (p480 ? (cy < 465 ? 11'd860 : 11'd859)
+                                                                          : (cy < 210 ? 11'd1656 : 11'd1655)) : normal_w;
+`else
+    wire [10:0] frame_w = normal_w;
+`endif
     wire [9:0] frame_h = p480 ? 10'd525 : 10'd750;
     assign frame_width = frame_w;
     assign frame_height = frame_h;
