@@ -1,3 +1,4 @@
+`include "variant.vh"
 // Mega Drive / Genesis core for Tang FPGA boards
 // nand2mario, 10/2024
 module mdtang_top (
@@ -6,6 +7,13 @@ module mdtang_top (
 `ifdef VERILATOR
 	input clk_sys,
     input clk_z80,                  // 1/2 clk_sys
+`ifdef MD_VIDEO_SIM
+    input clk_pixel_sim,
+    input [31:0] video_config_sim,
+    output [23:0] video_rgb_sim,
+    output [10:0] video_cx_sim,
+    output [9:0] video_cy_sim,
+`endif
 
 	input [11:0] joy_btns,          // snes layout: R L X A RT LT DN UP START SELECT Y B, active high
     input [11:0] joy2_btns,
@@ -267,7 +275,12 @@ assign joy_usb1 = '0;
 assign joy_usb2 = '0;
 assign overlay = 1'b0;
 assign core_config = verilator_core_config;
+`ifdef MD_VIDEO_SIM
+assign video_config = video_config_sim;
+`else
 assign video_config = '0;
+assign pause_core = 1'b0;
+`endif
 
 `else
 
@@ -372,6 +385,20 @@ usb_hid_host usb_hid_host2 (
 assign joy_usb2 = 12'b0;
 `endif
 
+`endif // iosys / USB, absent in Verilator
+
+`ifndef VERILATOR
+`define MD_VIDEO_ACTIVE
+`endif
+`ifdef MD_VIDEO_SIM
+`define MD_VIDEO_ACTIVE
+wire hclk = clk_pixel_sim;
+wire hclk5 = 1'b0;
+assign video_rgb_sim = fb.rgb;
+assign video_cx_sim = fb.cx;
+assign video_cy_sim = fb.cy;
+`endif
+`ifdef MD_VIDEO_ACTIVE
 // HDMI output ---------------------------------------------------------------------------
 reg ce_pix_r, hblank_r;
 reg [8:0] x;
@@ -406,7 +433,12 @@ framebuffer #(
     .WIDTH(320), .HEIGHT(240), .COLOR_BITS(4)
 ) fb (
     .clk(clk_sys), .resetn(~reset), .clk_pixel(hclk), .clk_5x_pixel(hclk5),
-    .ce_pix(ce_pix & hsync_seen), .r(red), .g(green), .b(blue), .x(x), .y(y), 
+    .hblank(hblank), .vblank(vblank),
+    `ifdef MD_INTERLACE
+    .ce_pix(ce_pix & (interlace_any | hsync_seen)),
+`else
+    .ce_pix(ce_pix & hsync_seen),
+`endif .r(red), .g(green), .b(blue), .x(x), .y(y), 
     .interlace(interlace_any), .double_res(interlace_dres), .field(field),
     .width(resolution[0] ? 320 : 256), .height(resolution[1] ? 240 : 224),      // resolution: 0: 256x224, 1: 320x224, 2: 256x240, 3: 320x240
     .audio_left(pause_menu ? 16'd0 : audio_left), .audio_right(pause_menu ? 16'd0 : audio_right),    // silent while paused
@@ -423,6 +455,8 @@ framebuffer #(
 // assign led = ~{2'b0, vblank, md_on, loading != 0, overlay, iosys_loaded, ~reset};
 
 `endif
+
+`undef MD_VIDEO_ACTIVE
 
 // snes layout: R L X A RT LT DN UP START SELECT Y B, high active
 // md layout:   Z,Y,X,Mode,Start,C,B,A,Up,Down,Left,Right

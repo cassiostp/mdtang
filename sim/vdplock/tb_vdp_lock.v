@@ -1,27 +1,19 @@
-// VDP field lengths and the halt lock with the real vdp.v + the real
-// framebuffer_sync.sv (issue #47).
-// Programs R1/R12 through the CPU bus, then counts HV_VCNT steps between
-// FIELD edges (lines per field), pause_core halts per field, and the game
-// rate in fields/second over the run:
-//   NTSC progressive : 262/field, locked to HDMI (one halt per field, ~59.93)
-//   NTSC interlace   : 262/263 alternating, free-run (no halts, ~59.81)
-//   PAL progressive  : 313/field (informational: longer than HDMI, stalls)
-//   PAL interlace    : 312/313 alternating, free-run (~50.24)
-// +PAL=1 selects PAL, +ILACE=1 interlace mode 1 (R12 bit 1), +DRES=1
-// interlace mode 2 (R12 bits 2:1), +V30=1 the 240-line mode (R1 bit 3),
-// +NOGATE=1 models mdtang_top.sv without the interlace free-run gate
-// (shows the full-frame stall the gate exists to avoid).
-`timescale 1ns/1ps
+// Real VDP, programmed over its CPU bus, feeding the interlace capture,
+// three-field store, scaler and native-rate halt lock. Count HV counter
+// advances per field, and tag every stored pixel with field/line/column.
+// During scanout each parity must have one epoch and the expected position;
+// assert that the VDP never writes a bank owned by HDMI. PAL is not exposed
+// by mdtang_top (Americas/NTSC), so the integrated suite tests NTSC modes.
+`timescale 1ns/1fs
 
 module tb_vdp_lock;
     reg clk_sys = 0, clk_pixel = 0;
     always #9.286 clk_sys = ~clk_sys;              // 53.846 MHz
-    `ifdef HZ120
+`ifdef HZ120
     always #9.259259259 clk_pixel = ~clk_pixel;
 `else
     always #6.734006734 clk_pixel = ~clk_pixel;
 `endif
-    //          // 74.25 MHz
 
     integer ilace = 0, dres = 0, pal_i = 0, v30 = 0, nogate = 0, nf = 12;
     initial begin
@@ -134,7 +126,7 @@ module tb_vdp_lock;
     always @(posedge clk_sys) aud <= aud + 1;
     framebuffer #(.WIDTH(320), .HEIGHT(240), .COLOR_BITS(4)) fb (
         .clk(clk_sys), .resetn(rst_n), .clk_pixel(clk_pixel), .clk_5x_pixel(1'b0),
-        .ce_pix(ce_pix & hsync_seen),
+        .hblank(hblank), .vblank(vblank), .ce_pix(ce_pix & (interlace_any | hsync_seen)),
         .r({y[3:0]}), .g(y[4:1]), .b(x[7:4]), .x(x), .y(y),
         .width(resolution[0] ? 320 : 256), .height(resolution[1] ? 240 : 224),
         .pause_core(pause_core),
@@ -232,19 +224,18 @@ module tb_vdp_lock;
     reg ce_r = 0;
     always @(posedge clk_sys) begin
         ce_r <= fb.ce_pix;
-        if (fb.ce_pix && !ce_r && (interlace_any ? (y > 0 && y <= (v30 ? 240 : 224)) : y < (v30 ? 240 : 224)) && x < 256) begin
-            if (interlace_any && fb.ilace_valid != 0 && fb.ilace_pixel &&
+        if (interlace_any && fb.ilace_write) begin
+            if (fb.ilace_y == 0 && fb.ilace_x == 0) epoch = epoch + 1;
+            if (fb.ilace_valid != 0 && fb.ilace_pixel &&
                 (fb.ilace_wr_bank == fb.ilace_bank_even || fb.ilace_wr_bank == fb.ilace_bank_odd))
                 $fatal(1, "writer owns an HDMI bank");
             tags[fb.mem_portA_addr] = epoch;
-            lines_written[fb.mem_portA_addr] = interlace_any ? y-1 : y;
-            cols_written[fb.mem_portA_addr] = x;
+            lines_written[fb.mem_portA_addr] = fb.ilace_y;
+            cols_written[fb.mem_portA_addr] = fb.ilace_x;
             parity_written[fb.mem_portA_addr] = field_out;
         end
-        if (vblank && !vb_r) epoch = epoch + 1;
-        vb_r <= vblank;
+
     end
-    reg vb_r = 0;
     integer a, rp, rl;
     always @(posedge clk_pixel) begin
         if (fb.cx == 0 && fb.cy == 0) begin read_seen[0] = 0; read_seen[1] = 0; end

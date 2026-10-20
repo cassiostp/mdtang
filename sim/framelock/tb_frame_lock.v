@@ -177,7 +177,7 @@ module tb_frame_lock;
         .clk(clk), .resetn(1'b1), .clk_pixel(clk_pixel), .clk_5x_pixel(1'b0),
         .ce_pix(ce_pix & hsync_seen), .r(pr), .g(pg), .b(pb), .x(x), .y(y),
         .width(W), .height(H), .pause_core(pause_core),
-        .interlace(1'b0), .double_res(1'b0), .field(1'b0), .std_timing(1'b0),
+        .hblank(1'b0), .vblank(1'b0), .interlace(1'b0), .double_res(1'b0), .field(1'b0), .std_timing(1'b0),
         .overlay(1'b0), .overlay_x(ovx), .overlay_y(ovy), .overlay_color(15'd0),
         .scanlines(1'b0), .sl_darkness(2'd0), .sl_thick(1'b0), .sl_out(sl_out_tb),
         .video_config(vcfg),

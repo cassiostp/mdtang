@@ -7,7 +7,7 @@ Genesis/Mega Drive for the Tang Console 138K/60K. Mostly verbatim port of `MiSTe
 ## Layout
 
 - Top: `src/mdtang_top.sv` (`module mdtang_top`), machine `src/system.sv` (`module system`, M68K/Z80/PSG/FM).
-- Video: synchronised upscaler `src/framebuffer_sync.sv` (16-line BRAM) into `src/hdmi/hdmi.sv`; helpers `src/scanlines.v`, `src/video_fx.v`, `src/smooth.v`. `src/iosys/framebuffer.sv` is a legacy fixed-`1650` version, unused by the build.
+- Video: synchronised upscaler `src/framebuffer_sync.sv` (short buffer for progressive 720p; three-field interlace store on 138K) into `src/hdmi/hdmi.sv`; helpers `src/scanlines.v`, `src/video_fx.v`, `src/smooth.v`. `src/iosys/framebuffer.sv` is a legacy fixed-`1650` version, unused by the build.
 - Memory: `src/memory/sdram.v` (32 MB CL2 SDRAM) + `src/memory/rv_sdram_adapter.v`; `src/memory/sdram_sim.v` under Verilator.
 - iosys: `src/iosys/iosys_bl616.v` is the build's copy (plus `textdisp.v`, `uart_fixed.v`, `gowin_dpb_menu.v`). `iosys_picorv32.v` exists but is not in `build.tcl`.
 - PLLs: `src/pll/` (138K `PLL`: `pll/pll_27/pll_74/pll_12.v`), `src/plla/` (60K `PLLA`); board glue `src/boards/console.v` (console USB) vs `mega.cst`.
@@ -36,7 +36,7 @@ gw_sh build.tcl console138k                        # standard 720p build (also w
 TANGCORE_VARIANT=hz120 gw_sh build.tcl console138k # 480p 120 Hz build
 ```
 
-Unset, empty or `standard` is the normal build; `hz120` is the 480p120 build (console138k only, anything else is an error); anything else stops with an error. `build.tcl` prints `TangCore variant: <name>` so it shows in the build log, and sets the include path to `src/variant/<variant>` (a second `set_option -include_path` line with an absolute path derived from the script's location: Gowin resolves the path at synthesis time under `impl/`, so a relative path misses): the files that differ (`framebuffer_sync.sv`, `hdmi.sv`, `textdisp.v`, the two `pll_74.v`) do `` `include "variant.vh" ``, which defines `HZ120` for hz120 and nothing for standard. The standard variant is the unmodified build; every 120 Hz difference is inside `` `ifdef HZ120 ``. CI:
+Unset, empty or `standard` is the normal build; `hz120` is the 480p120 build (console138k only, anything else is an error); anything else stops with an error. `build.tcl` prints `TangCore variant: <name>` so it shows in the build log, and sets the include path to `src/variant/<variant>` (a second `set_option -include_path` line with an absolute path derived from the script's location: Gowin resolves the path at synthesis time under `impl/`, so a relative path misses): the files that differ (`framebuffer_sync.sv`, `hdmi.sv`, `textdisp.v`, the two `pll_74.v`) do `` `include "variant.vh" ``, which defines `HZ120` for hz120 and nothing for standard. The 138K headers define `MD_INTERLACE` for native interlace timing and a three-field weave store; all 120 Hz differences are inside `` `ifdef HZ120 ``. The 60K boards select `src/variant/legacy/variant.vh` and retain the original short-buffer video path. CI:
 
 ```sh
 gh workflow run cores.yml -R cassiostp/tangcore --ref ci/core-builds \
@@ -44,9 +44,7 @@ gh workflow run cores.yml -R cassiostp/tangcore --ref ci/core-builds \
 ```
 
 The hz120 bitstream is saved as `mdtang_120hz.bin` (artifact `mdtang-console138k-hz120);
-the standard one stays `mdtang.bin`. The 120 Hz double frame buffer costs ~108 BSRAM
-blocks over the standard build (feature/hz120 measured 89 to 197 on 138K), so hz120
-is 138K-only: the 60K has 118 blocks.
+the standard one stays `mdtang.bin`. Both 138K variants reserve three 320x240 RGB4 field banks for interlace. Progressive 720p uses the original ring addresses within that store; progressive hz120 uses its original two banks. The 60K has 118 BSRAM blocks and keeps its original short buffer; hz120 remains 138K-only.
 
 ## Clocks and constraints
 
@@ -57,6 +55,10 @@ is 138K-only: the 60K has 118 blocks.
 
 Genesis native rate is a 1652-pixel line (`NATIVE_FRAME_WIDTH = 1652` in `src/framebuffer_sync.sv`; 59.9274 Hz at 74.25 MHz). `std_timing = 1` selects the standard 1650 line; `video_std_timing` is tied `1'b0` in `src/mdtang_top.sv`, so the build is native-only.
 The scaler asserts `pause_core` when input reaches line 0 (`sync_y` 1/2, +1 with smoothing) and clears it at HDMI `hdmi_first_line`; `mdtang_top.sv` gates `system.PAUSE_EN` (M68K/Z80 clocks, audio held) on it.
+
+On 138K interlace, the VDP alternates 262/263 lines. HDMI uses 1,241,460 pixel clocks per 720p refresh or 451,440 per 480p120 refresh (two refreshes per field), giving 59.80861244 fields/s, +0.127 ppm above the NTSC target. Progressive cadence is unchanged. Only line totals change: 1656/1655 in 720p, 860/859 in 480p120; sync start/width and active dimensions stay standard. `std_timing` bypasses the native cadence.
+
+The interlace capture latches VBL at HBL's falling edge: VBL changes at HINT before the final eight active pixels. HDMI owns one completed field per parity; the VDP writes the third bank, halts after the last active pixel, and receives the discarded bank at the next HDMI field boundary. Mode 2 reads alternate rows from the even/odd banks (448 or 480 rows). Integer is 1x vertically, centred; Full fills the existing 4:3 viewport. At 1x scanlines alternate output rows, and thin/thick coincide. The OSD retains its progressive coordinates. Progressive video, rate and audio pitch are unchanged.
 
 ## Firmware link
 
@@ -78,6 +80,9 @@ not part of the repositories.
 - `framelock`: real `framebuffer_sync.sv` (1652) vs the VDP model (3420 clocks/line, 262 lines); locked rate, per-frame wait, re-lock within 2 frames.
 - `saveram`: `tb_system_save` (real iosys+sdram port 3 as the top, MD bus on port 0) and `tb_sdram_save` (port-3 map, row-crossing) plus engine-level `tb_saveram_sdram`.
 - `scanlines`: `scanlines.v` geometry/darkening plus whole-frame scaler-vs-model with release row.
+- `vdplock`: Verilator real-VDP CPU programming, 262/263-line alternation, native interlace lock and per-pixel field/position/ownership checks (`run.sh standard|hz120`).
+- `weave`: Verilator 448/480-line geometry, Integer/Full and scanlines, plus the real HDMI counters for native/progressive/standard timing (`run.sh standard|hz120`).
+- `compat`: Verilator differential pixels and OSD coordinates against `int/round7` for both progressive variants (`run.sh standard|hz120`; requires git history).
 - `tmds`: 2-stage `tmds_channel` vs the pre-split version over HDMI sequences.
 - `video_fx`: `0x13`, `video_fx` vs `model.py`, regress-vs-git-history with filters off, FX/smoothing/sync checks.
 

@@ -29,6 +29,8 @@ module framebuffer #(
 	input clk_5x_pixel,             // 5x pixel clock
 
     // video signals
+    input hblank,
+    input vblank,
     input ce_pix,                   // pixel strobe
     input [COLOR_BITS-1:0] r,       // pixel color
     input [COLOR_BITS-1:0] g,
@@ -113,7 +115,7 @@ reg ce_pix_r;
 reg [7:0] y_r = 8'd0;
 always @(posedge clk) begin
     ce_pix_r <= ce_pix;
-    if (ce_pix & ~ce_pix_r && (ilace_on ? (y != 0 && y <= height && x < width) : (y < FB_H && {1'b0, x} < FB_W))) begin
+    if (ilace_on ? ilace_write : (ce_pix & ~ce_pix_r && y < FB_H && {1'b0, x} < FB_W)) begin
         mem[mem_portA_addr] <= {r, g, b};
         mem_portA_we <= 1'b1;
     end else
@@ -144,7 +146,7 @@ reg ce_pix_r, hblank_r;
 assign mem_portA_addr = ilace_on ? ilace_addr_a : y[4:0] * WIDTH + x;
 always @(posedge clk) begin
     ce_pix_r <= ce_pix;
-    if (ce_pix & ~ce_pix_r && (!ilace_on || (y != 0 && y <= height && x < width)))
+    if (ilace_on ? ilace_write : (ce_pix & ~ce_pix_r))
         mem[mem_portA_addr] <= {r, g, b};
 end
 `endif
@@ -161,7 +163,6 @@ reg dres_s1 = 0, dres_s2 = 0, dres_pixel = 0;
 reg [1:0] ilace_wr_bank = 2;
 reg ilace_wr_par = 0;
 reg ilace_pause = 0;
-reg [7:0] ilace_y_r = 0;
 reg ilace_rel_tgl = 0;
 reg [1:0] ilace_return_bank = 0;
 reg [2:0] ilace_rel_sync = 0;
@@ -172,8 +173,30 @@ reg ilace_ready_s1 = 0, ilace_ready_s2 = 0;
 reg [1:0] ilace_bank_even = 0, ilace_bank_odd = 1, ilace_bank_last = 0;
 reg [1:0] ilace_valid = 0;
 reg ilace_f0 = 0;
-// y=0 is the partial dummy line after VBL; complete active lines are 1..height.
-wire [17:0] ilace_addr_a = ilace_wr_bank * 18'd76800 + (y - 8'd1) * 18'd320 + x;
+// VBL changes at HINT, eight pixels before HBL. Latch it at the start
+// of each active line so the last eight pixels of the last line survive.
+reg [8:0] ilace_x = 0;
+reg [7:0] ilace_y = 0;
+reg ilace_hblank_r = 1, ilace_line_active = 0;
+wire ilace_active = ilace_hblank_r && !hblank ? !vblank : ilace_line_active;
+wire ilace_write = ce_pix && !ce_pix_r && !hblank && ilace_active && ilace_y < height && ilace_x < width;
+always @(posedge clk) begin
+    ilace_hblank_r <= hblank;
+    if (!resetn || !ilace_on) begin
+        ilace_x <= 0;
+        ilace_y <= 0;
+        ilace_line_active <= 0;
+    end else begin
+        if (hblank) ilace_x <= 0;
+        else if (ce_pix && !ce_pix_r) ilace_x <= ilace_x + 1'b1;
+        if (ilace_hblank_r && !hblank) begin
+            ilace_line_active <= !vblank;
+            if (vblank) ilace_y <= 0;
+        end
+        if (!ilace_hblank_r && hblank && ilace_line_active) ilace_y <= ilace_y + 1'b1;
+    end
+end
+wire [17:0] ilace_addr_a = ilace_wr_bank * 18'd76800 + ilace_y * 18'd320 + ilace_x;
 wire [8:0] weave_line;
 wire [1:0] ilace_rd_bank = dres_pixel ? (weave_line[0] ? ilace_bank_odd : ilace_bank_even) : ilace_bank_last;
 wire [7:0] ilace_rd_line = dres_pixel ? weave_line[8:1] : yy_s;
@@ -181,7 +204,6 @@ wire [17:0] ilace_addr_b = ilace_rd_bank * 18'd76800 + ilace_rd_line * 18'd320 +
 wire ilace_ready = dres_pixel ? (&ilace_valid) : (|ilace_valid);
 assign pause_core = ilace_on ? ilace_pause : pause_prog;
 always @(posedge clk) begin
-    ilace_y_r <= y;
     ilace_rel_sync <= {ilace_rel_sync[1:0], ilace_rel_tgl};
     ilace_rel_seen <= ilace_rel_sync[2];
     if (!resetn || !ilace_on) begin
@@ -192,8 +214,8 @@ always @(posedge clk) begin
         ilace_pause <= 0;
         ilace_wr_bank <= ilace_return_bank;
     end else if (!ilace_pause) begin
-        if (y == 1 && x == 0 && ce_pix && !ce_pix_r) ilace_wr_par <= field;
-        if (y == height[7:0] + 8'd1 && ilace_y_r != height[7:0] + 8'd1) ilace_pause <= 1;
+        if (ilace_write && ilace_y == 0 && ilace_x == 0) ilace_wr_par <= field;
+        if (ilace_write && {2'b0, ilace_y} == height - 10'd1 && {2'b0, ilace_x} == width - 11'd1) ilace_pause <= 1;
     end
 end
 always @(posedge clk_pixel) begin
@@ -241,6 +263,7 @@ wire dres_pixel = 1'b0;
 wire ilace_ready = 1'b1;
 // y=0 is the partial dummy line after VBL; complete active lines are 1..height.
 wire [17:0] ilace_addr_a = 0, ilace_addr_b = 0;
+wire ilace_write = 1'b0;
 assign pause_core = pause_prog;
 `endif
 
@@ -310,9 +333,15 @@ always @(posedge clk_pixel) begin
         // bfi_ins still holds the pre-toggle value: 1 means this frame is the
         // even one (the release slot). Apply-pending above is the odd frame,
         // so the two never assign bfi_swap_pending in the same cycle.
-        if (bfi_ins && pause_s2) begin
-            rd_bank <= wr_bank_s2;
-            rel_tgl <= ~rel_tgl;
+        if (bfi_ins && (pause_s2
+`ifdef MD_INTERLACE
+                        || (ilace_pixel && ilace_ready_s2)
+`endif
+                       )) begin
+            if (!ilace_pixel) begin
+                rd_bank <= wr_bank_s2;
+                rel_tgl <= ~rel_tgl;
+            end
             if (bfi_mode_eff != 2'd0) begin
                 if (bfi_swap_cnt == BFI_SWAP_FRAMES - 1) begin
                     bfi_swap_cnt <= 11'd0;
