@@ -23,3 +23,5 @@ Check the images and mode/cadence logs after running. The raw game video,
 audio, save window and any hashes are local simulation outputs; do not add
 them to git or upload them. The separate synthetic `sim/vdplock` suite tags
 all reads for bank ownership, epoch, parity and source position.
+
+`VERILATOR_THREADS` is a build-time setting (default 1): the compiled model and runtime thread pool use the same count. Rebuild after changing it; `VERILATOR_THREADS=1` retains the single-thread path.
