@@ -21,6 +21,10 @@
 #include "Vmdtang_top_vdp.h"
 #include "verilated.h"
 
+#ifndef TANGCORE_SIM_THREADS
+#define TANGCORE_SIM_THREADS 1
+#endif
+
 #define H_RES 320
 #define V_RES 224
 
@@ -35,6 +39,7 @@ static int hdmi_frames=0;
 static uint8_t hdmi_img[1280*720*3];
 static const char *capture_tag=nullptr;
 static int video_w=1280, video_h=720;
+static bool capture_all_hdmi = false;
 static int vcnt_prev=485, field_prev=0, field_lines=0;
 static uint64_t game_fields=0;
 static uint64_t game_rate_start=0;
@@ -73,8 +78,8 @@ static inline void step() {
                 auto p=&hdmi_img[(y*video_w+x-1)*3];
                 p[0]=c>>16;p[1]=c>>8;p[2]=c;
             }
-            if(x==video_w && y==video_h-1 && md->interlace_dres && hdmi_frames%30==0) {
-                char path[1024];snprintf(path,sizeof path,"%s_woven_%d.ppm",capture_tag,hdmi_frames);
+            if(x==video_w && y==video_h-1 && (capture_all_hdmi || (md->interlace_dres && hdmi_frames%30==0))) {
+                char path[1024];snprintf(path,sizeof path,"%s_%s_%d.ppm",capture_tag,capture_all_hdmi ? "hdmi" : "woven",hdmi_frames);
                 FILE *f=fopen(path,"wb");fprintf(f,"P6\n%d %d\n255\n",video_w,video_h);fwrite(hdmi_img,1,video_w*video_h*3,f);fclose(f);
             }
         }
@@ -100,6 +105,8 @@ static uint8_t scr[H_RES * V_RES * 3];
 
 int main(int argc, char **argv) {
     Verilated::commandArgs(argc, argv);
+    Verilated::threadContextp()->threads(TANGCORE_SIM_THREADS);
+    fprintf(stderr, "model threads: %u\n", Verilated::threadContextp()->threads());
     if (argc < 4) { fprintf(stderr, "usage: smoke_md <rom> <frames> <tag> [script] [dumps]\n"); return 1; }
     const char *rompath = argv[1];
     long want_frames = atol(argv[2]);
@@ -119,6 +126,8 @@ int main(int argc, char **argv) {
         while (tok) { long f = atol(tok); if (f < 10000) dumpall[f] = true; tok = strtok(nullptr, ","); }
     }
 
+    const char *capture = getenv("MD_CAPTURE_HDMI");
+    capture_all_hdmi = capture && atoi(capture) != 0;
     top = new Vmdtang_top;
     if(getenv("HZ120")) {pix_half=9259259;pix_next=pix_half;video_w=720;video_h=480;}
     top->video_config_sim=0;

@@ -27,7 +27,7 @@ CCACHE_OFF :=
 else
 CCACHE_OFF := -e CCACHE_DISABLE=1
 endif
-DOCKER := $(DOCKER_RUN) --user "$(shell id -u):$(shell id -g)" $(CCACHE_OFF)
+DOCKER := $(DOCKER_RUN) --name "$${SIM_PREFIX:-sim$$$$}_cosim" --user "$(shell id -u):$(shell id -g)" $(CCACHE_OFF)
 VMOUNT := -v "$(COSIM)/../..:/coresim-src:ro" -v "$(COSIM)/build:/coresim-build" -w /coresim-build
 VERILATOR := $(DOCKER) $(VMOUNT) verilator/verilator:latest
 IVERILOG := $(DOCKER) -v "$(COSIM)/../..:/coresim-src:ro" -v "$(COSIM)/build:/coresim-build" -w /coresim-build tangcore-iv:1
@@ -100,9 +100,10 @@ model: $(GEN)/iosys_bl616_cosim.v $(GEN)/sdram_sim_ctrl.v $(GEN)/uart_fixed_sim.
 	$(VERILATOR) --cc --top-module cosim_top --prefix Vcosim_top \
 	    -Mdir obj -DCOSIM -CFLAGS "-O2" \
 	    +incdir+/coresim-src/src/variant/standard \
-	    -Wno-PINMISSING -Wno-IMPLICIT -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-CASEINCOMPLETE \
+	    -Wno-PINMISSING -Wno-IMPLICIT -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-CASEINCOMPLETE -Wno-CASEX \
 	    $(COSIM_SRCS) > $(COSIM)/build/verilate.log 2>&1 && \
-	test ! -s $(COSIM)/build/verilate.log || ! grep -E "PINMISSING.*(cosim_top|sdram_chip|gowin_dpb)" $(COSIM)/build/verilate.log
+	{ test ! -s $(COSIM)/build/verilate.log || ! grep -E "PINMISSING.*(cosim_top|sdram_chip|gowin_dpb)" $(COSIM)/build/verilate.log; } || \
+	{ cat $(COSIM)/build/verilate.log; exit 1; }
 	# NOTE: PINMISSING is waived only for the core's own files (unconnected
 	# RxD_idle/endofpacket in iosys); a missing pin in cosim_top, the chip
 	# or the stand-in is a wiring bug (the NES port once hid an unconnected

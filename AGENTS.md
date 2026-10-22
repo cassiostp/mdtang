@@ -95,3 +95,5 @@ Each `sim/*` bench with a `run.sh` takes `[standard|hz120]` (default both; `scan
 - Keep the two SDCs in sync; only `console60k.sdc` has the Z80-synchroniser cuts, and only because 138K meets them.
 - `mega*` builds omit `boards/console.v` (which defines USB1/USB2) + `usb_hid_host.v` + `pll_12.v`: no USB HID there.
 - `README.md` still says SRAM saves and other features are "not activated yet"; the save channel above is what the tree actually builds.
+
+Run `sh sim/regress.sh quick both` before handing work back; `quick` is the minimum check. Use `full both` for all benches, `--only bench1,bench2` to select, and `--list` for tiers, variants, images and typical times. At most two benches run together; logs and tables are in `sim/.regress/`. `TANGCORE_ROMS` defaults to `~/tangcore-test-bundle/test roms`; missing ROMs and unsupported variants SKIP. Keep ROM-derived output local.

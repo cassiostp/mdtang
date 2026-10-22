@@ -1,14 +1,16 @@
 #!/bin/sh
 # Build one Genesis smoke model at a given ref.
 # Usage: build.sh <TAG> <SRCDIR>
-# Env: SMOKE_BUILD (model root, default ./build), JOBS (default 8).
+# Env: SMOKE_BUILD (model root, default ./build), JOBS (default $(nproc)).
 # Run inside the verilator docker image. Source list from
 # verilator/Makefile (upstream), sim_main.cpp replaced by tb_smoke_md.cpp.
 set -e
 SDIR=$(cd "$(dirname "$0")" && pwd)
 TAG=$1; SRC=$(cd "$2" && pwd)
 BLD=${SMOKE_BUILD:-$SDIR/build}
-JOBS=${JOBS:-8}
+JOBS=${JOBS:-$(nproc)}
+THREADS=${VERILATOR_THREADS:-1}
+case $THREADS in ''|*[!0-9]*|0) echo "VERILATOR_THREADS must be positive" >&2; exit 2;; esac
 B=$BLD/md/$TAG
 R=$SRC
 mkdir -p "$B/obj"
@@ -31,9 +33,9 @@ SRCS="$D/mdtang_top.sv \
  $D/jt12/mixer/jt12_comb.v $D/jt12/mixer/jt12_fm_uprate.v \
  $D/peripherals/genesis_lpf.v $D/peripherals/audio_iir_filter.v \
  $D/t80/t80_alu.v $D/t80/t80.v $D/t80/t80_mcode.v $D/t80/t80_reg.v $D/t80/t80s.v $D/framebuffer_sync.sv $D/scanlines.v $D/video_fx.v $SDIR/../scanlines/hdmi_stub.v"
-verilator --top-module mdtang_top +1800-2023ext+sv \
+verilator --threads "$THREADS" --top-module mdtang_top +1800-2023ext+sv \
  -Wno-PINMISSING -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-CASEINCOMPLETE -Wno-CASEX \
- -DMD_VIDEO_SIM -I$D/variant/${VARIANT:-standard} -Wno-fatal -cc --exe -o Vmdtang_smoke -CFLAGS "-O3" -I$D -I$D/fx68k -I$D/vdp $SRCS "$B/obj/tb_smoke_md.cpp" \
+ -DMD_VIDEO_SIM -I$D/variant/${VARIANT:-standard} -Wno-fatal -cc --exe -o Vmdtang_smoke -CFLAGS "-O3 -DTANGCORE_SIM_THREADS=$THREADS" -I$D -I$D/fx68k -I$D/vdp $SRCS "$B/obj/tb_smoke_md.cpp" \
  --Mdir "$B/obj/obj" >"$B/obj/last-step.log" 2>&1; rc=$?; tail -5 "$B/obj/last-step.log"; test $rc -eq 0
 make CXX="ccache g++" -j"$JOBS" -C "$B/obj/obj" -f Vmdtang_top.mk Vmdtang_smoke >"$B/obj/last-step.log" 2>&1; rc=$?; tail -5 "$B/obj/last-step.log"; test $rc -eq 0
 test -x "$B/obj/obj/Vmdtang_smoke"
