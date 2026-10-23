@@ -183,7 +183,8 @@ set_option -use_sspi_as_gpio 1
 set_option -use_mspi_as_gpio 1
 set_option -use_cpu_as_gpio 1
 
-# use the slower but timing-optimized place algorithm
-set_option -place_option 2
+# Gowin's default place algorithm (3): on this core it builds in half the
+# time of place 2 at equal timing margin (tangcore#67)
+set_option -place_option 3
 
 run all
