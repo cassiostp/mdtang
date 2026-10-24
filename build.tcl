@@ -185,5 +185,8 @@ set_option -use_cpu_as_gpio 1
 
 # use the slower but timing-optimized place algorithm
 set_option -place_option 2
+# route 1: with place 2, Gowin's default route (2) takes about three
+# times as long here (tangcore#67)
+set_option -route_option 1
 
 run all
